@@ -1,0 +1,6 @@
+# Dependencias del ETL (incluye las del portal y boto3).
+# Instalar desde la carpeta climate_portal_v3:
+#   .\.venv\Scripts\python.exe -m pip install -r etl\requirements_etl.txt
+-r ../requirements_aws.txt
+PyMySQL>=1.1,<2
+pg8000>=1.30,<2
