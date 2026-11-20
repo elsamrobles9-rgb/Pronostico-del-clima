@@ -12,7 +12,7 @@ from services.endpoints import DemoClient, LambdaClient, EndpointClient, ApiErro
 class PortalTests(unittest.TestCase):
     def setUp(self):
         self.backend = DemoClient()
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         self.app = create_app(self.backend, auth_path=self.temp.name+"/auth.sqlite3")
         self.app.testing = True
@@ -35,8 +35,8 @@ class PortalTests(unittest.TestCase):
     def path(self, action): return "/" + action + "?" + urlencode(self.keys)
 
     def test_list_and_english_fields(self):
-        html = self.web.get("/").get_data(as_text=True)
-        for text in ("Add record", "UV index", "Dew point", "LOC-001", "Edit record", "Delete record"):
+        html = self.web.get("/records").get_data(as_text=True)
+        for text in ("Add record", "UV index", "Dew point", "LOC-CDMX", "Edit record", "Delete record"):
             self.assertIn(text, html)
         self.assertNotIn("id_ubicacion", html)
 
@@ -91,9 +91,12 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(self.backend.get(self.keys)["version"], 1)
 
     def test_keys_cannot_be_changed(self):
-        fields = {**sample(), **self.form(self.path("edit")), "location_id": "OTHER"}
+        fields = {**sample(), **self.form(self.path("edit")), "timestamp_utc": "2026-10-11T00:00:00Z"}
         html = self.web.post(self.path("edit"), data=fields).get_data(as_text=True)
         self.assertIn("keys cannot be changed", html)
+        fields = {**sample(), **self.form(self.path("edit")), "location_id": "OTHER"}
+        html = self.web.post(self.path("edit"), data=fields).get_data(as_text=True)
+        self.assertIn("Only LOC-CDMX", html)
         self.assertEqual(len(self.backend.table.rows), 1)
 
     def test_delete_requires_confirmation_and_checks_version(self):

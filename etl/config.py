@@ -6,6 +6,8 @@ credenciales de AWS se leen de tu perfil local y las de las bases de datos
 se piden al ejecutar, sin mostrarse ni guardarse.
 """
 
+import os
+
 REGION = "us-east-1"
 
 # --- Fuente de datos reales -------------------------------------------------
@@ -18,9 +20,12 @@ API_ATRIBUCION = "Weather data by Open-Meteo.com (CC BY 4.0)"
 MODELOS = [None, "gfs_seamless"]
 MAX_FALTANTES = 0.05
 
-FECHA_INICIO = "2026-07-01"   # incluida
-FECHA_FIN = "2026-09-30"      # incluida (92 días = 2,208 horas por ciudad)
-HORAS_POR_UBICACION = 2000    # 5 ubicaciones x 2,000 = 10,000 registros
+# semanal.py cambia estos tres valores con variables de entorno para bajar solo la última semana.
+# Solo CDMX (autorizado por el profesor): 425 días = 10,200 horas; se guardan las 10,000 más recientes
+# válidas (unos 13.9 meses de historial, con temporada seca y de lluvias).
+FECHA_INICIO = os.environ.get("CLIMA_FECHA_INICIO", "2025-09-20")   # incluida
+FECHA_FIN = os.environ.get("CLIMA_FECHA_FIN", "2026-11-18")         # incluida
+HORAS_POR_UBICACION = int(os.environ.get("CLIMA_HORAS_POR_UBICACION", "10000"))
 
 # Variable de Open-Meteo -> campo del contrato V2 (contract.py)
 VARIABLES = {
@@ -49,24 +54,14 @@ FUENTES = [
          source_type="MANUAL", priority=2),
 ]
 
-# Una estación virtual por ubicación (station_type VIRTUAL, cada 60 min).
+# El sistema trabaja solo con la Ciudad de México (estación virtual Open-Meteo, cada 60 min).
+UBICACION_FIJA = "LOC-CDMX"
+ESTACION_FIJA = "ST-CDMX-OM"
 UBICACIONES = [
     dict(location_id="LOC-CDMX", station_id="ST-CDMX-OM", station_code="OM-CDMX",
          name="Ciudad de México - Centro", city="Ciudad de México",
          state="Ciudad de México", country="México",
          latitude="19.4326", longitude="-99.1332", timezone_name="America/Mexico_City"),
-    dict(location_id="LOC-GDL", station_id="ST-GDL-OM", station_code="OM-GDL",
-         name="Guadalajara - Centro", city="Guadalajara", state="Jalisco", country="México",
-         latitude="20.6597", longitude="-103.3496", timezone_name="America/Mexico_City"),
-    dict(location_id="LOC-MTY", station_id="ST-MTY-OM", station_code="OM-MTY",
-         name="Monterrey - Centro", city="Monterrey", state="Nuevo León", country="México",
-         latitude="25.6866", longitude="-100.3161", timezone_name="America/Monterrey"),
-    dict(location_id="LOC-MID", station_id="ST-MID-OM", station_code="OM-MID",
-         name="Mérida - Centro", city="Mérida", state="Yucatán", country="México",
-         latitude="20.9674", longitude="-89.5926", timezone_name="America/Merida"),
-    dict(location_id="LOC-TIJ", station_id="ST-TIJ-OM", station_code="OM-TIJ",
-         name="Tijuana - Centro", city="Tijuana", state="Baja California", country="México",
-         latitude="32.5149", longitude="-117.0382", timezone_name="America/Tijuana"),
 ]
 INTERVALO_ESPERADO_MIN = 60
 

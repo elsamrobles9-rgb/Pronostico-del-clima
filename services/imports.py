@@ -5,6 +5,7 @@ import time
 from flask import abort, flash, g, redirect, render_template, request, session, url_for, Response
 from contract import REQUIRED, dumps, load_json, normalize_record
 from services.endpoints import ApiError, sample
+from services.catalog import check_record, resolve_condition
 
 MAX_ROWS=50
 
@@ -37,14 +38,23 @@ def parse_file(filename, raw):
         result.append(entry)
     return result
 
-def register_imports(app,store,client,scope):
+def apply_catalog(rows, catalog):
+    """Calculate AUTO conditions and check IDs against the MySQL catalog (AWS mode)."""
+    for entry in rows:
+        if entry['error']: continue
+        try: entry['record']=check_record(resolve_condition(entry['record']),catalog)
+        except ValueError as exc: entry['error']=str(exc)
+    return rows
+
+def register_imports(app,store,client,scope,auth=None):
+    auth=auth or store
     @app.route('/import',methods=['GET','POST'])
     def import_records():
         if request.method=='POST':
             file=request.files.get('file')
             try:
                 if not file or not file.filename: raise ValueError('Choose a CSV or JSON file.')
-                rows=parse_file(file.filename,file.stream.read(262145))
+                rows=apply_catalog(parse_file(file.filename,file.stream.read(262145)),auth.catalog())
                 job=secrets.token_urlsafe(24)
                 with store.connect() as db:
                     db.execute('DELETE FROM imports WHERE created<?',(time.time()-86400,))
@@ -71,21 +81,31 @@ def register_imports(app,store,client,scope):
         with store.connect() as db:
             claimed=db.execute("UPDATE imports SET state='processing' WHERE id=? AND state='preview'",(job,)).rowcount
         if not claimed: return redirect(url_for('import_preview',job=job))
+        created=[]
         for row in rows:
+            entity=row['record']['location_id']+'|'+row['record']['timestamp_utc']
             try:
-                client.create(row['record'])
+                result=client.create(row['record'])
                 row['result']='Imported'
+                if result.get('record'): created.append(result['record'])
+                app.extensions['audit']('READING_IMPORT','READING',entity,'SUCCESS',after=result.get('record'))
             except ApiError as exc:
                 row['result']='Not confirmed: '+str(exc)+' Check the record before retrying.'
+                app.extensions['audit']('READING_IMPORT','READING',entity,'REJECTED',after=row['record'],reason=str(exc))
             # Save after each response; never automatically retry an uncertain write.
             with store.connect() as db:
                 db.execute('UPDATE imports SET payload=? WHERE id=?',(dumps(rows),job))
         with store.connect() as db: db.execute("UPDATE imports SET state='completed' WHERE id=?",(job,))
+        if created: app.extensions['analytics_sync'](created,'importacion')   # SP sp_upsert_lecturas
         return redirect(url_for('import_preview',job=job))
 
     @app.get('/import/template/<kind>')
     def import_template(kind):
-        row=sample(); row['location_id']='IMPORT-001'
+        row=sample(); row['timestamp_utc']='2026-10-10T06:00:00Z'
+        catalog=auth.catalog()
+        if catalog:
+            row.update(condition_id='AUTO',
+                       source_id='SRC-MANUAL' if 'SRC-MANUAL' in catalog['source_ids'] else sorted(catalog['source_ids'])[0])
         if kind=='json': data=dumps([row]); mime='application/json'
         elif kind=='csv':
             stream=io.StringIO(newline=''); writer=csv.DictWriter(stream,fieldnames=sorted(REQUIRED));writer.writeheader();writer.writerow(row)

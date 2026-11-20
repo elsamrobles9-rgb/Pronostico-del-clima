@@ -5,6 +5,7 @@ instance/
 *.sqlite3
 etl/datos/
 etl/datos_semanal/
+etl/respaldos/
 *.pem
 .env
 *.zip

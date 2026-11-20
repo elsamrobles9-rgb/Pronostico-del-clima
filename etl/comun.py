@@ -14,7 +14,8 @@ if str(PORTAL_DIR) not in sys.path:
 
 from contract import decimal_text, dumps, load_json  # noqa: E402
 
-DATOS = ETL_DIR / "datos"
+# semanal.py usa otra carpeta para no tocar los 10,000 registros originales.
+DATOS = Path(os.environ["CLIMA_DATOS_DIR"]) if os.environ.get("CLIMA_DATOS_DIR") else ETL_DIR / "datos"
 CRUDOS = DATOS / "crudos"
 LECTURAS = DATOS / "lecturas.jsonl"
 RECHAZADAS = DATOS / "rechazadas.jsonl"

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clima en la Ciudad de México</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body class="publico">{% from 'weather_icons.html' import wx, flecha %}
+<header class="pub-header"><a class="brand" href="{{ url_for('public_home') }}">◈ Clima CDMX</a><span class="muted">Ciudad de México · Pronóstico del sistema</span>
+<a class="button light" href="{{ url_for('index') if current_user else url_for('login') }}">{{ 'Panel de administración' if current_user else 'Acceso administrador' }}</a></header>
+<main class="pub">
+{% if mode == 'demo' %}<div class="notice">Modo demo · datos sintéticos de ejemplo · sin AWS</div>{% endif %}
+{% if problem %}<div class="alert error" role="alert">{{ problem }}</div>{% else %}{% set a = data.actual %}
+<section class="actual-grid">
+{% if a %}<div class="actual">
+  <p class="actual-cond">{{ a.texto }}</p>
+  <div class="actual-main">{{ wx(a.icono, a.dia_luz, 'wx wx-xl') }}<span class="actual-temp">{{ a.temperatura }}°</span></div>
+  <p>Sensación de <strong>{{ a.sensacion }}°</strong></p>
+  <ul class="actual-datos">
+    <li>Humedad <strong>{{ a.humedad }} %</strong></li>
+    <li>Viento {{ flecha(a.giro) }} <strong>{{ a.rumbo }} · {{ a.viento }} km/h</strong></li>
+    <li>Índice UV <strong>{{ a.uv }} {{ a.uv_texto }}</strong> · FPS {{ a.fps }}</li>
+    <li>Lluvia en la última hora <strong>{{ a.lluvia }} mm</strong></li>
+  </ul>
+  <p class="actual-hora">Última lectura: {{ a.hora }} (hora de la CDMX)</p>
+</div>{% endif %}
+<aside class="pub-info card">
+  <h2>Pronóstico estadístico del sistema</h2>
+  <p>Se calcula con {{ data.historia.dias }} días de lecturas por hora de la CDMX ({{ data.historia.desde.strftime('%d/%m/%Y') }} a {{ data.historia.hasta.strftime('%d/%m/%Y') }}): lo normal de la temporada más la desviación de los últimos días, que se va apagando. Las horas se reparten con el ciclo típico del día.</p>
+  <p class="muted">No es un modelo físico como los de los servicios meteorológicos. Datos: Open-Meteo.com (CC BY 4.0).</p>
+</aside>
+</section>
+<nav class="pub-tabs"><a href="#dias">Clima 1 - 7 días</a><a href="#horas">Por hora</a></nav>
+<section id="dias" class="dias">
+{% for d in data.dias %}<a class="dia{% if d.elegido %} elegido{% endif %}" href="{{ url_for('public_home', dia=d.dia.isoformat()) }}#horas">
+  <strong>{{ d.nombre }}</strong><span class="muted">{{ d.fecha }}</span>{{ wx(d.icono, True) }}
+  {% if d.prob >= 30 %}<span class="prob">{{ d.prob }} %</span><span class="mm">{{ d.mm }} mm</span>{% else %}<span class="prob vacio">-</span><span class="mm vacio">-</span>{% endif %}
+  <span class="temps"><span class="max">{{ d.maxima }}°</span> / <span class="min">{{ d.minima }}°</span></span>
+  <span class="muted">{{ d.texto }} · {{ d.humedad }} %</span></a>{% endfor %}
+</section>
+<section id="horas" class="horas card">
+  <h2>Tiempo en la Ciudad de México, {{ data.titulo_dia }}</h2>
+  <div class="table-wrap"><table><thead><tr><th>Hora</th><th></th><th>Temp.</th><th>Condición</th><th>Prob. de lluvia</th><th>Humedad</th></tr></thead><tbody>
+  {% for h in data.horas %}<tr><td class="hora">{{ h.hora }}</td><td>{{ wx(h.icono, h.dia_luz, 'wx wx-sm') }}</td><td class="t">{{ h.temperatura }}°</td><td>{{ h.texto }}</td><td>{{ h.prob }} %{% if h.mm > 0 %} · {{ h.mm }} mm{% endif %}</td><td>{{ h.humedad }} %</td></tr>
+  {% else %}<tr><td colspan="6" class="empty">Ya no quedan horas de hoy; elige otro día.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endif %}
+</main><footer>AWS Clima V2 · Datos de Open-Meteo.com (CC BY 4.0) · Pronóstico estadístico del sistema, no oficial</footer></body></html>

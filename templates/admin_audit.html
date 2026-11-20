@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block content %}
+<div class="heading"><div><p class="eyebrow">TRACEABILITY</p><h1>Audit log</h1><p class="muted">Latest 150 events: sign-ins, failed attempts, record changes, imports, administrators, password changes and rotations.{% if users_store == 'mysql' %} Stored in MySQL table audit_events.{% endif %}</p></div></div>
+<form method="post" action="{{ url_for('admin_audit_rotate') }}" class="card toolbar"><input type="hidden" name="csrf" value="{{ csrf }}"><strong>Rotate the log (sp_rotar_auditoria)</strong><label>Move events older than <input name="days" type="number" min="0" max="3650" value="30" required> days to the history table</label><button class="button primary">Rotate now</button><span class="muted">{% if history is not none %}{{ history }} events in the history table{% else %}History table not installed yet{% endif %} · expired sessions are removed too</span></form>
+<div class="table-wrap"><table><thead><tr><th>When (UTC)</th><th>Actor</th><th>Action</th><th>Entity</th><th>Key</th><th>Outcome</th><th>Reason</th><th>Request ID</th></tr></thead><tbody>
+{% for e in events %}<tr><td>{{ e.occurred_at_utc }}</td><td>{{ e.actor }}</td><td>{{ e.action }}</td><td>{{ e.entity_type }}</td><td>{{ e.entity_key }}</td><td>{{ e.outcome }}</td><td class="wrap-cell">{{ e.reason or '' }}</td><td>{{ e.request_id or '' }}</td></tr>
+{% else %}<tr><td colspan="8" class="empty">No events yet.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

@@ -1,6 +1,6 @@
-# ETL de AWS Clima V2: 10,000 registros reales en DynamoDB y PostgreSQL
+# ETL de AWS Clima V2: 10,000 registros reales de la CDMX en DynamoDB y PostgreSQL
 
-Este módulo carga **10,000 registros climáticos reales** (5 ciudades × 2,000 horas, de julio a septiembre de 2026) y los hace pasar por los tres motores de la arquitectura:
+Este módulo carga **10,000 registros climáticos reales por hora de la Ciudad de México** (unos 14 meses: de septiembre de 2025 a noviembre de 2026; el profesor autorizó trabajar solo con la CDMX) y los hace pasar por los tres motores de la arquitectura:
 
 ```
 Open-Meteo (datos reales)
@@ -13,9 +13,9 @@ datos/lecturas.jsonl (10,000)  +  paso3_catalogos_mysql.sql
    │ paso 3: catálogos ───────────────► RDS MySQL  climate_transactional
    │ paso 4: carga por lotes ─────────► DynamoDB   ClimateReadingsV2
    ▼
-   │ paso 5: ETL (lee DynamoDB + catálogo MySQL) ─► stg_observations ─► 10 STORED PROCEDURES
+   │ paso 5: ETL (lee DynamoDB + catálogo MySQL) ─► stg_observations ─► STORED PROCEDURES 1 a 10
    ▼                                                 series · observations · etl_batches · climate_aggregates
-   │ paso 6: predicción (Python + SP 9 y 10) ──────► predictions · prediction_evaluations · model_metrics
+   │ paso 6: predicción 7 días + por hora (prediccion/modelo.py + SP 9 y 10) ─► predictions · model_metrics
 consultas_verificacion.sql · consultas_prediccion.sql (DBeaver)
 ```
 
@@ -38,7 +38,7 @@ consultas_verificacion.sql · consultas_prediccion.sql (DBeaver)
    ```
    Sin este archivo la conexión sigue cifrada, pero no se verifica el certificado del servidor. El script te avisa cuando falta.
 
-Si quieres otras ciudades u otras fechas, cámbialas en `etl\config.py` **antes** del paso 1.
+Las fechas están en `etl\config.py`. Para pasar de las 5 ciudades anteriores a solo CDMX se usa una vez `etl\purgar_otras_ciudades.py` (respalda y luego borra las otras ciudades de las tres bases; ver `INSTRUCCIONES_PAQUETE_1.md`).
 
 ## Paso 1 · Descargar los datos reales (sin AWS)
 
@@ -46,7 +46,7 @@ Si quieres otras ciudades u otras fechas, cámbialas en `etl\config.py` **antes*
 .\.venv\Scripts\python.exe etl\paso1_descargar.py
 ```
 
-**Qué esperar:** una línea por ciudad con `2208 horas` y el modelo usado. Tarda alrededor de un minuto. Si el modelo predeterminado no trae visibilidad o índice UV, el script prueba automáticamente con el modelo GFS.
+**Qué esperar:** una línea para la CDMX con unas `10200 horas` y el modelo usado. Tarda alrededor de un minuto. Si el modelo predeterminado no trae visibilidad o índice UV, el script prueba automáticamente con el modelo GFS.
 
 ## Paso 2 · Transformar y validar (sin AWS)
 
@@ -64,7 +64,7 @@ Si quieres otras ciudades u otras fechas, cámbialas en `etl\config.py` **antes*
 
 1. Abre `etl\datos\paso3_catalogos_mysql.sql` en **VS Code** y copia todo su contenido (Ctrl+A, Ctrl+C). Copiarlo desde VS Code evita problemas con los acentos.
 2. En DBeaver, abre un editor SQL en la conexión **MySQL**, pega el contenido y ejecuta todo con **Alt+X**.
-3. La última consulta debe mostrar **2** fuentes, **8** condiciones, **5** ubicaciones y **5** estaciones.
+3. La última consulta debe mostrar **2** fuentes, **8** condiciones, **1** ubicación (CDMX) y **1** estación. Si la CDMX ya está en el catálogo, este paso no hace falta.
 
 ## Paso 4 · Cargar en DynamoDB
 
@@ -90,7 +90,13 @@ El script muestra tu rol y la tabla, y te pide confirmar con `s`. Si dice `cread
 
 *Necesita la RDS **climate-postgres** encendida.*
 
-En DBeaver abre `etl\sql\procedimientos_postgres.sql` sobre la conexión **PostgreSQL** y ejecútalo completo con **Alt+X**. Crea la tabla de staging `stg_observations` y estos procedimientos en el esquema `climate_analytics`:
+Un solo comando instala los de PostgreSQL (`etl\sql\procedimientos_postgres.sql`) y los de MySQL (`sql\mysql_procedimientos.sql`):
+
+```powershell
+.\.venv\Scripts\python.exe etl\instalar_sp.py
+```
+
+En PostgreSQL crea la tabla de staging `stg_observations` y estos procedimientos en el esquema `climate_analytics`:
 
 | # | Procedimiento | Qué hace |
 |---|---|---|
@@ -103,9 +109,17 @@ En DBeaver abre `etl\sql\procedimientos_postgres.sql` sobre la conexión **Postg
 | 7 | `sp_calcular_agregados_diarios` | Promedios diarios por día local |
 | 8 | `sp_cerrar_lote` | Cierra el lote con conteos; las filas rechazadas quedan como **cola de anómalos** |
 | 9 | `sp_evaluar_predicciones` | Compara predicciones con lo que realmente pasó |
-| 10 | `sp_calcular_metricas` | Calcula **MAE y RMSE** por ciudad y variable |
+| 10 | `sp_calcular_metricas` | Calcula **MAE y RMSE** por variable |
+| 11 | `sp_upsert_lecturas` | Lo usa el **portal**: inserta o actualiza al instante lo que un administrador crea, edita o importa (mismo camino que un lote: 1, 3, 4, 5, 7, 9 y 8) |
 
-La última consulta del script debe mostrar 10 `PROCEDURE` y 2 `FUNCTION`. Se puede ejecutar más de una vez. Requiere PostgreSQL 13 o superior (`SELECT version();`).
+Y en MySQL `climate_transactional`:
+
+| # | Procedimiento | Qué hace |
+|---|---|---|
+| 12 | `sp_guardar_admin` | Alta de administrador o cambio de contraseña (recibe solo el hash), revoca sus sesiones y audita |
+| 13 | `sp_rotar_auditoria` | Mueve la bitácora vieja a `audit_events_history`, limpia sesiones vencidas y audita la rotación |
+
+Debe mostrar 11 procedimientos en PostgreSQL y 2 en MySQL (13 en total). Se puede ejecutar más de una vez. Requiere PostgreSQL 13 o superior.
 
 ## Paso 5 · ETL a PostgreSQL
 
@@ -139,18 +153,40 @@ Si algo falla a mitad del proceso, no queda nada a medias: el lote se revierte y
 ```
 
 Te pide el usuario y la contraseña de PostgreSQL, y luego hace lo siguiente:
-1. Divide los días completos de `climate_aggregates` en **entrenamiento (70 %)**, **validación (15 %)** y **prueba (15 %)**.
-2. Compara 3 métodos para predecir el día siguiente: **persistencia** ("mañana igual que hoy"), **promedio de 7 días** y **regresión lineal** (día anterior + promedio de 7 días).
-3. Muestra el error de cada uno (**MAE** y **RMSE**) y elige el que menos se equivoca en validación.
-4. Muestra el pronóstico de los próximos 7 días por ciudad y pide confirmar con `s`.
-5. Guarda en `prediction_models`, `training_runs`, `model_metrics` (MAE y RMSE) y `predictions` (días de prueba y 7 días futuros).
+1. Lee las lecturas por hora de la CDMX (`observations`).
+2. Compara 3 métodos para **cada horizonte de 1 a 7 días**, sin hacer trampa: cada pronóstico solo usa lo que se sabía el día en que se emitió.
+   - **Climatología + anomalía amortiguada** (el modelo publicado, `prediccion/modelo.py`): lo normal de la temporada (mismas fechas del año anterior) + la desviación de los últimos días, que se va apagando con `phi^k`.
+   - **Persistencia** y **promedio móvil de 7 días** como referencias.
+   Validación = las 4 semanas anteriores a la prueba; prueba = las últimas 4 semanas.
+3. Muestra el **MAE por horizonte** de cada método y el error **por hora** del día siguiente.
+4. Publica el pronóstico nuevo: **7 días + 168 horas** (el ciclo típico del día reparte la temperatura, la humedad y la lluvia).
+5. Guarda en `prediction_models`, `training_runs`, `model_metrics` (MAE y RMSE por horizonte, y por hora) y `predictions` (días de prueba y el pronóstico nuevo, con granularidad DAY y HOUR).
 6. Llama a `sp_evaluar_predicciones` y `sp_calcular_metricas` para evaluar los días de prueba contra lo real.
 
-Cada vez que corres el paso 5 con datos nuevos, `sp_evaluar_predicciones` también evalúa los pronósticos futuros cuyo día real ya llegó: así se audita el error contra las mediciones posteriores.
+Es el **reentrenamiento semanal** (lo corre `semanal.py`). La página pública del portal usa el mismo modelo y calcula el pronóstico al momento de la consulta, así "hoy" siempre empieza en la hora actual.
 
-Revisa los resultados con `etl\consultas_prediccion.sql` en DBeaver. La consulta 5 muestra la temperatura real contra la predicha, lista para graficar.
+Revisa los resultados con `etl\consultas_prediccion.sql` en DBeaver: la consulta 1 compara los métodos por horizonte, la 4 muestra las horas y la 7 está lista para graficar real contra predicho.
 
-**Aclaración para la entrega:** es un pronóstico **estadístico** con 3 meses de datos. Funciona razonablemente para la temperatura del día siguiente, pero es débil para la lluvia. Los servicios meteorológicos usan modelos físicos de la atmósfera.
+**Aclaración para la entrega:** es un pronóstico **estadístico** con unos 14 meses de una sola ciudad. Los servicios meteorológicos usan modelos físicos de la atmósfera.
+
+## Cada semana · Ingesta + ETL + reentrenamiento en un solo comando
+
+```powershell
+.\.venv\Scripts\python.exe etl\semanal.py
+```
+
+Hace, en orden: paso 1 (descarga los últimos 7 días hasta ayer), paso 2, paso 4 (DynamoDB),
+paso 5 (ETL incremental con los 10 stored procedures) y paso 6 (reentrena y mide MAE/RMSE).
+Pide la contraseña de MySQL y dos veces la de PostgreSQL. Si un paso falla se detiene; volver a
+ejecutarlo es seguro porque los duplicados se rechazan y el ETL solo toma cambios nuevos.
+
+Opciones: `--hasta 2026-11-18` (último día), `--dias 7`, `--sin-prediccion`, `--si`.
+Los archivos de cada semana quedan en `etl\datos_semanal\<fecha>\`; los 10,000 originales no se tocan.
+
+**Por qué no se programa solo en el laboratorio:** las credenciales de Learner Lab caducan cada 4 horas
+y el laboratorio se apaga. En producción se programaría con **Amazon EventBridge Scheduler**
+(por ejemplo `cron(0 6 ? * MON *)`, cada lunes 06:00 UTC) que lanza estos mismos pasos en una Lambda
+o en una tarea de ECS, con las contraseñas en **AWS Secrets Manager**.
 
 ## Verificar (DBeaver)
 
@@ -174,9 +210,9 @@ Abre `etl\consultas_verificacion.sql` en la conexión **PostgreSQL** y ejecuta c
 | `La instancia ... está 'stopped'` | Enciende la RDS y espera a que diga `available`. |
 | Se queda esperando y marca *timeout* al conectar a MySQL o PostgreSQL | Tu IP cambió. Revísala en https://checkip.amazonaws.com y agrégala al security group. |
 | `database "climate_analytics" does not exist` | Cambia `POSTGRES_DB` en `etl\config.py` por el nombre de base que aparece en tu conexión de DBeaver. |
-| `Faltan los procedimientos almacenados` | Instala `etl\sql\procedimientos_postgres.sql` en DBeaver (Alt+X). |
+| `Faltan los procedimientos almacenados` | Corre `etl\instalar_sp.py`. |
 | `function gen_random_uuid() does not exist` | Tu PostgreSQL es anterior a la 13; avísame para adaptar el script. |
-| Menos de 10,000 registros en el paso 2 | Amplía `FECHA_FIN` en `config.py` y repite los pasos 1 y 2. |
+| Menos de 10,000 registros en el paso 2 | Adelanta `FECHA_INICIO` en `config.py` y repite los pasos 1 y 2. |
 
 ## Créditos de los datos
 
@@ -184,5 +220,5 @@ Los datos meteorológicos provienen de **Open-Meteo.com** ([Historical Forecast 
 
 ## Pendiente (siguiente versión)
 
-- Guardar las filas rechazadas en `ClimateRejectedRecords` y registrar cada carga en `ClimateIdempotency`. Para eso hace falta confirmar las llaves de esas tablas.
+- Guardar las filas rechazadas también en `ClimateRejectedRecords` (hoy la cola de anómalos es la tabla `stg_observations` de PostgreSQL, consulta 8). `ClimateIdempotency` ya la usa la API del portal.
 - Que las Lambdas escriban eventos en `ClimateOutbox`. Hoy el ETL usa `transaction_id` y `updated_at_utc` de cada registro para detectar cambios.

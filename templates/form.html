@@ -2,7 +2,7 @@
 {% block content %}
 <a class="back" href="{{ url_for('index') }}">← Back to records</a>
 <h1>{{ 'Edit record' if editing else 'Add record' }}</h1>
-<p class="muted">{% if editing %}Location, station and timestamp cannot be changed. Reopen the record if another user has updated it.{% else %}The observation time defaults to now. For historical observations, change the date, time and UTC offset. Record IDs are generated automatically.{% endif %}</p>
+<p class="muted">{% if editing %}Location, station and timestamp cannot be changed. Reopen the record if another user has updated it.{% else %}The system works only with Mexico City (LOC-CDMX, station ST-CDMX-OM). {% if catalog %}Sources and conditions come from the MySQL catalog. {% endif %}The observation time defaults to now. For historical observations, change the date, time and UTC offset. Record IDs are generated automatically.{% endif %}</p>
 <form method="post" class="card" id="record-form">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   {% if editing %}<input type="hidden" name="snapshot" value="{{ snapshot }}">{% endif %}
@@ -18,6 +18,22 @@
   {% for key,label,kind in fields %}
     {% if key == 'timestamp_utc' and not editing %}
       <input id="timestamp_utc" name="timestamp_utc" type="hidden" value="{{ data.get(key, '') }}">
+    {% elif key in ('location_id', 'station_id') and not editing %}
+    <label>{{ label }}
+      <input id="{{ key }}" name="{{ key }}" type="text" value="{{ data.get(key) or ('LOC-CDMX' if key == 'location_id' else 'ST-CDMX-OM') }}" readonly></label>
+    {% elif catalog and key == 'source_id' %}
+    <label>{{ label }}
+      <select id="source_id" name="source_id" required>
+      {% for src in catalog.sources %}<option value="{{ src.source_id }}" {% if data.get(key) == src.source_id %}selected{% endif %}>{{ src.source_id }} — {{ src.name }}</option>{% endfor %}
+      {% if data.get(key) and data.get(key) not in catalog.source_ids %}<option value="{{ data.get(key) }}" selected>{{ data.get(key) }} (not in catalog)</option>{% endif %}
+      </select></label>
+    {% elif catalog and key == 'condition_id' %}
+    <label>{{ label }}
+      <select id="condition_id" name="condition_id" required>
+      <option value="{{ auto }}" {% if data.get(key) == auto %}selected{% endif %}>Automatic: calculate from the measurements</option>
+      {% for cond in catalog.conditions %}<option value="{{ cond.condition_id }}" {% if data.get(key) == cond.condition_id %}selected{% endif %}>{{ cond.condition_id }} — {{ cond.name }}</option>{% endfor %}
+      {% if data.get(key) and data.get(key) != auto and data.get(key) not in catalog.condition_ids %}<option value="{{ data.get(key) }}" selected>{{ data.get(key) }} (not in catalog)</option>{% endif %}
+      </select></label>
     {% else %}
     <label>{{ label }}
       <input id="{{ key }}" name="{{ key }}" type="{{ kind }}" value="{{ data.get(key, '') }}" required

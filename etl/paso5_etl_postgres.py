@@ -95,14 +95,18 @@ def llamar(destino, procedimiento, *argumentos, devuelve=True):
 
 
 # --------------------------------------------------------------------------- catálogo
-def catalogo_mysql():
+def conectar_mysql():
     import pymysql
     host, puerto = endpoint(config.MYSQL_INSTANCE)
     usuario = pedir("CLIMA_MYSQL_USER", "Usuario de MySQL (el que usas en DBeaver): ")
     clave = getpass.getpass("Contraseña de MySQL (no se muestra): ")
-    conexion = pymysql.connect(host=host, port=puerto, user=usuario, password=clave, database=config.MYSQL_DB,
-                               ssl=contexto_ssl(), connect_timeout=15, charset="utf8mb4",
-                               cursorclass=pymysql.cursors.DictCursor)
+    return pymysql.connect(host=host, port=puerto, user=usuario, password=clave, database=config.MYSQL_DB,
+                           ssl=contexto_ssl(), connect_timeout=15, charset="utf8mb4", autocommit=False,
+                           cursorclass=pymysql.cursors.DictCursor)
+
+
+def catalogo_mysql():
+    conexion = conectar_mysql()
     try:
         with conexion.cursor() as cursor:
             cursor.execute(

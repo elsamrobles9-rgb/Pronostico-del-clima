@@ -1,22 +1,26 @@
-"""PASO 6 · Predicción del clima diario con los datos de PostgreSQL.
+"""PASO 6 · Pronóstico de 7 días con desglose por hora para la Ciudad de México.
 
 Qué hace:
-  1. Lee los agregados diarios (climate_aggregates) de las 5 ciudades.
-  2. Divide los días en ENTRENAMIENTO (70 %), VALIDACIÓN (15 %) y PRUEBA (15 %).
-  3. Compara 3 métodos que predicen el día siguiente:
-       - Persistencia:      "mañana será igual que hoy" (referencia mínima).
-       - Promedio 7 días:   "mañana será como la última semana".
-       - Regresión lineal:  combina el día anterior y el promedio de 7 días.
-  4. Mide el error de cada método (MAE) y elige el que menos se equivoca en VALIDACIÓN.
-  5. Guarda todo en PostgreSQL (la evaluación y las métricas de prueba del ganador las
-     calculan los stored procedures sp_evaluar_predicciones y sp_calcular_metricas):
-       prediction_models · training_runs · model_metrics
-       predictions (días de PRUEBA y 7 días futuros) · prediction_evaluations (PRUEBA vs. real)
+  1. Lee de PostgreSQL las lecturas por hora de CDMX (observations).
+  2. Evalúa 3 métodos para los próximos 1 a 7 días (horizontes), sin hacer trampa:
+     cada pronóstico solo usa lo que se sabía el día en que se emitió.
+       - Climatología + anomalía amortiguada (el modelo publicado, prediccion/modelo.py):
+         lo normal de la temporada + la desviación de hoy, que se va apagando.
+       - Persistencia: "los próximos días serán iguales a hoy" (referencia).
+       - Promedio móvil de 7 días (referencia).
+     Validación = 4 semanas anteriores a la prueba; prueba = las últimas 4 semanas.
+  3. Calcula MAE y RMSE por variable y por horizonte (día 1 a día 7) y el error por hora
+     del día siguiente.
+  4. Guarda en PostgreSQL (una sola transacción):
+       prediction_models · training_runs · model_metrics (DAY por horizonte y HOUR)
+       predictions: días de PRUEBA (horizonte 1) y el pronóstico nuevo (7 días + 168 horas)
+     La evaluación de la prueba y sus métricas las calculan los SP sp_evaluar_predicciones
+     y sp_calcular_metricas.
 
-Todo ocurre en una sola transacción. Repetirlo crea una nueva corrida (historial).
+Repetirlo crea una corrida nueva (queda el historial). Es el reentrenamiento semanal.
 Necesita la RDS climate-postgres encendida y credenciales de AWS vigentes.
 
-Ejecutar desde la carpeta climate_portal_v3:
+Ejecutar desde la carpeta del proyecto:
     .\\.venv\\Scripts\\python.exe etl\\paso6_predecir.py
 """
 import argparse
@@ -24,278 +28,241 @@ import hashlib
 import json
 import sys
 import uuid
-from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import config
 from comun import confirmar, id_estable, sql_texto
+from prediccion import modelo as M
 
 S = config.POSTGRES_SCHEMA
 t = sql_texto
-VENTANA = 7
-RIDGE = 0.01
-DIAS_FUTUROS = 7
-UMBRAL_LLUVIA_MM = 0.5
-VARIABLES = {  # columna de climate_aggregates -> unidad
-    "temperature_mean_c": "°C", "temperature_min_c": "°C", "temperature_max_c": "°C",
-    "humidity_mean_pct": "%", "precipitation_total_mm": "mm",
-}
+HORIZONTE = 7
+DIAS_PRUEBA = 28
+DIAS_VALIDACION = 28
+PUBLICADO = "CLIMATOLOGY_ANOMALY"
+UNIDADES = {"temperature_mean_c": "°C", "temperature_min_c": "°C", "temperature_max_c": "°C",
+            "humidity_mean_pct": "%", "precipitation_total_mm": "mm", "temperature_c": "°C", "humidity_pct": "%"}
 METODOS = {
+    "CLIMATOLOGY_ANOMALY": dict(
+        name="Climatología + anomalía amortiguada (7 días y por hora)",
+        description="Normal de la temporada (mismas fechas del año anterior) + sesgo del último mes + "
+                    "anomalía de los últimos 3 días que se apaga con phi^k; reparto horario con el ciclo "
+                    "típico de los últimos 30 días."),
     "PERSISTENCE": dict(name="Persistencia (día anterior)",
-                        description="Predice que mañana será igual que hoy. Es la referencia mínima a superar."),
+                        description="Los próximos días serán iguales al último día real. Referencia mínima."),
     "MOVING_AVERAGE_7D": dict(name="Promedio móvil de 7 días",
-                              description="Predice el promedio de los últimos 7 días."),
-    "LINEAR_REGRESSION": dict(name="Regresión lineal (día anterior + promedio 7 días)",
-                              description="Mínimos cuadrados con regularización ridge, ajustada por ciudad y variable."),
+                              description="Los próximos días serán como el promedio de los últimos 7 días."),
 }
 
 
 # --------------------------------------------------------------------------- datos
-def leer_agregados(destino):
+def leer_horas(destino):
     filas = destino.ejecutar(
-        f"SELECT s.series_id::text, s.location_id, s.timezone_name,"
-        f" (a.starts_at_utc AT TIME ZONE s.timezone_name)::date::text, a.starts_at_utc::text, a.ends_at_utc::text,"
-        f" a.version, a.coverage_pct::text, " + ", ".join(f"a.{v}::text" for v in VARIABLES) +
-        f" FROM {S}.climate_aggregates a JOIN {S}.series s ON s.series_id = a.series_id"
-        f" WHERE a.granularity = 'DAY' ORDER BY s.location_id, a.starts_at_utc", filas=True)
-    series = defaultdict(list)
-    for sid, lid, zona, dia, inicio, fin, version, cobertura, *valores in filas:
-        if Decimal(str(cobertura)) < 100:   # días incompletos (inicio y fin del periodo)
-            continue
-        series[sid].append(dict(series_id=sid, location_id=lid, zona=zona, dia=date.fromisoformat(str(dia)[:10]),
-                                inicio=str(inicio), fin=str(fin), version=int(version),
-                                **{v: float(Decimal(str(x))) for v, x in zip(VARIABLES, valores)}))
-    return dict(series)
+        f"SELECT s.series_id::text, s.timezone_name, o.timestamp_utc::text, o.temperature_c::text,"
+        f" o.humidity_pct::text, o.precipitation_mm::text"
+        f" FROM {S}.observations o JOIN {S}.series s ON s.series_id = o.series_id"
+        f" WHERE o.deleted_at_utc IS NULL AND s.location_id = {t(config.UBICACION_FIJA)}"
+        f" ORDER BY o.timestamp_utc", filas=True)
+    if not filas:
+        return None, None, []
+    horas = [dict(ts_utc=datetime.fromisoformat(ts), temperature_c=temp, humidity_pct=hum, precipitation_mm=lluvia)
+             for _, _, ts, temp, hum, lluvia in filas]
+    return filas[0][0], filas[0][1], horas
 
 
-def dividir(series):
-    dias = sorted({d["dia"] for filas in series.values() for d in filas})
-    if len(dias) < 30:
-        raise RuntimeError(f"Solo hay {len(dias)} días completos; se necesitan al menos 30. Ejecuta antes el paso 5.")
-    return dias[0], dias[int(len(dias) * 0.70)], dias[int(len(dias) * 0.85)], dias[-1] + timedelta(days=1)
-
-
-# --------------------------------------------------------------------------- métodos
-def resolver(a, b):
-    """Resuelve a·x = b (3x3) por eliminación de Gauss."""
-    n = len(b)
-    m = [fila[:] + [b[i]] for i, fila in enumerate(a)]
-    for c in range(n):
-        p = max(range(c, n), key=lambda r: abs(m[r][c]))
-        m[c], m[p] = m[p], m[c]
-        if abs(m[c][c]) < 1e-12:
-            raise ArithmeticError("matriz singular")
-        for r in range(n):
-            if r != c:
-                f = m[r][c] / m[c][c]
-                m[r] = [x - f * y for x, y in zip(m[r], m[c])]
-    return [m[i][n] / m[i][i] for i in range(n)]
-
-
-def rasgos(historia, var):
-    return [1.0, historia[-1][var], sum(h[var] for h in historia[-VENTANA:]) / VENTANA]
-
-
-def ajustar(filas, var):
-    """Regresión lineal ridge: y = b0 + b1·ayer + b2·promedio7."""
-    xs = [rasgos(filas[:i], var) for i in range(VENTANA, len(filas))]
-    ys = [filas[i][var] for i in range(VENTANA, len(filas))]
-    xtx = [[sum(x[i] * x[j] for x in xs) + (RIDGE * len(xs) if i == j and i > 0 else 0) for j in range(3)]
-           for i in range(3)]
-    xty = [sum(x[i] * y for x, y in zip(xs, ys)) for i in range(3)]
-    return resolver(xtx, xty)
-
-
-def predecir(metodo, historia, var, coef=None):
-    if metodo == "PERSISTENCE":
-        valor = historia[-1][var]
-    elif metodo == "MOVING_AVERAGE_7D":
-        valor = sum(h[var] for h in historia[-VENTANA:]) / VENTANA
-    else:
-        valor = sum(c * x for c, x in zip(coef[var], rasgos(historia, var)))
-    if var == "humidity_mean_pct":
-        valor = min(100.0, valor)
-    return max(0.0, valor) if var in ("humidity_mean_pct", "precipitation_total_mm") else valor
-
-
-def pronostico(metodo, historia, coef):
-    p = {v: predecir(metodo, historia, v, coef) for v in VARIABLES}
-    p["temperature_min_c"] = min(p["temperature_min_c"], p["temperature_mean_c"])
-    p["temperature_max_c"] = max(p["temperature_max_c"], p["temperature_mean_c"])
-    lluviosos = sum(1 for h in historia[-VENTANA:] if h["precipitation_total_mm"] >= UMBRAL_LLUVIA_MM)
-    p["rain_probability_pct"] = 100.0 * lluviosos / VENTANA
-    return p
-
-
-def evaluar(series, metodo, coefs, desde, hasta):
-    """Predicción a 1 día para cada día en [desde, hasta). Devuelve lista de (fila_real, pronóstico)."""
-    pares = []
-    for sid, filas in series.items():
-        for i, real in enumerate(filas):
-            if desde <= real["dia"] < hasta and i >= VENTANA and filas[i - 1]["dia"] == real["dia"] - timedelta(days=1):
-                pares.append((real, pronostico(metodo, filas[:i], coefs.get(sid))))
-    return pares
-
-
-def mae(pares, var, sid=None):
-    errores = [abs(p[var] - r[var]) for r, p in pares if sid is None or r["series_id"] == sid]
-    return (sum(errores) / len(errores), len(errores)) if errores else (None, 0)
-
-
-def rmse(pares, var, sid=None):
-    errores = [(p[var] - r[var]) ** 2 for r, p in pares if sid is None or r["series_id"] == sid]
-    return ((sum(errores) / len(errores)) ** 0.5, len(errores)) if errores else (None, 0)
-
-
-# --------------------------------------------------------------------------- SQL
 def d6(x):
     return str(Decimal(str(x)).quantize(Decimal("0.000001")))
 
 
-def medianoche_utc(dia):
-    return f"{dia.isoformat()}T00:00:00Z"
+def inicio_dia(dia, zona):
+    return f"('{dia.isoformat()}'::date::timestamp AT TIME ZONE {t(zona)})"
+
+
+def inicio_hora(local, zona):
+    return f"('{local.isoformat(sep=' ')}'::timestamp AT TIME ZONE {t(zona)})"
+
+
+def utc_texto(dia):
+    """Medianoche local de CDMX en UTC (06:00Z) como texto ISO."""
+    return (datetime.combine(dia, datetime.min.time()) - M.DESFASE).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sql_modelos():
     valores = ",\n".join(
-        f"({t(id_estable('modelo', clave))}, {t(m['name'])}, {t(clave)}, {t(json.dumps(list(VARIABLES)))}, "
+        f"({t(id_estable('modelo', clave))}, {t(m['name'])}, {t(clave)}, {t(json.dumps(list(M.VARIABLES_EVALUADAS)))}, "
         f"{t(m['description'])}, true)" for clave, m in METODOS.items())
     return (f"INSERT INTO {S}.prediction_models (model_id, name, algorithm, targets, description, is_active)"
             f" VALUES\n{valores}\nON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description,"
-            f" algorithm = EXCLUDED.algorithm, targets = EXCLUDED.targets RETURNING model_id::text, algorithm")
+            f" algorithm = EXCLUDED.algorithm, targets = EXCLUDED.targets, is_active = true"
+            f" RETURNING model_id::text, algorithm")
 
 
-def huella(series):
-    texto = "\n".join(f"{d['series_id']}|{d['dia']}|" + "|".join(f"{d[v]:.6f}" for v in VARIABLES)
-                      for filas in series.values() for d in filas)
+def huella(modelo):
+    texto = "\n".join(f"{d}|" + "|".join(f"{modelo.dias[d][v]:.6f}" for v in M.VARIABLES_EVALUADAS)
+                      for d in modelo.fechas)
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()
 
 
+def fila_prediccion(corrida, sid, pronostico_id, inicio_sql, fin_sql, granularidad, p):
+    return (f"({t(str(uuid.uuid4()))}, {t(corrida)}, {t(sid)}, {t(pronostico_id)}, now(), {inicio_sql}, {fin_sql},"
+            f" {t(granularidad)}, {d6(p['tmin'])}, {d6(p['tmax'])}, {d6(p['tmed'])}, {d6(p['hum'])},"
+            f" {d6(p['prob'])}, {d6(p['mm'])})")
+
+
+def de_dia(p):
+    return dict(tmin=p["temperature_min_c"], tmax=p["temperature_max_c"], tmed=p["temperature_mean_c"],
+                hum=p["humidity_mean_pct"], prob=p["rain_probability_pct"], mm=p["precipitation_total_mm"])
+
+
+def de_hora(h):
+    return dict(tmin=h["temperature_c"], tmax=h["temperature_c"], tmed=h["temperature_c"], hum=h["humidity_pct"],
+                prob=h["rain_probability_pct"], mm=h["precipitation_mm"])
+
+
+# --------------------------------------------------------------------------- principal
 def main():
     import paso5_etl_postgres as p5
-    parser = argparse.ArgumentParser(description="Predicción diaria con climate_aggregates")
+    parser = argparse.ArgumentParser(description="Pronóstico de 7 días y por hora (CDMX)")
     parser.add_argument("--si", action="store_true", help="no pedir confirmación")
     args = parser.parse_args()
 
     destino = p5.conectar_postgres()
     p5.verificar_procedimientos(destino)
-    series = leer_agregados(destino)
+    sid, zona, horas = leer_horas(destino)
     destino.commit()
-    desde, fin_entreno, fin_valid, hasta = dividir(series)
-    print(f"Días completos: {sum(len(f) for f in series.values())} en {len(series)} ciudades")
-    print(f"  entrenamiento {desde} a {fin_entreno - timedelta(days=1)}")
-    print(f"  validación    {fin_entreno} a {fin_valid - timedelta(days=1)}")
-    print(f"  prueba        {fin_valid} a {hasta - timedelta(days=1)}\n")
+    if not horas:
+        print(f"No hay lecturas de {config.UBICACION_FIJA} en PostgreSQL. Corre primero el paso 5.")
+        destino.cerrar()
+        sys.exit(1)
 
-    # 1) Ajuste con ENTRENAMIENTO y comparación en VALIDACIÓN y PRUEBA
-    resultados = {}
-    for metodo in METODOS:
-        coefs = {}
-        if metodo == "LINEAR_REGRESSION":
-            for sid, filas in series.items():
-                entreno = [d for d in filas if d["dia"] < fin_entreno]
-                coefs[sid] = {v: ajustar(entreno, v) for v in VARIABLES}
-        resultados[metodo] = dict(coefs=coefs, VALIDATION=evaluar(series, metodo, coefs, fin_entreno, fin_valid),
-                                  TEST=evaluar(series, metodo, coefs, fin_valid, hasta))
-    print(f"{'Método':<52} {'MAE val. T media':>17} {'MAE prueba T media':>19} {'RMSE prueba T media':>20}")
-    for metodo, r in resultados.items():
-        print(f"{METODOS[metodo]['name']:<52} {mae(r['VALIDATION'], 'temperature_mean_c')[0]:>15.2f} °C"
-              f" {mae(r['TEST'], 'temperature_mean_c')[0]:>17.2f} °C {rmse(r['TEST'], 'temperature_mean_c')[0]:>18.2f} °C")
-    temperaturas = ("temperature_mean_c", "temperature_min_c", "temperature_max_c")
-    ganador = min(resultados, key=lambda m: sum(mae(resultados[m]["VALIDATION"], v)[0] for v in temperaturas))
-    print(f"\nGanador (menor error en validación): {METODOS[ganador]['name']}")
+    modelo = M.Modelo(horas)
+    ultimo = modelo.ultimo_dia()
+    inicio_prueba = ultimo - timedelta(days=DIAS_PRUEBA)
+    inicio_valid = inicio_prueba - timedelta(days=DIAS_VALIDACION)
+    if len(modelo.fechas) < DIAS_PRUEBA + DIAS_VALIDACION + 60:
+        print(f"Hay {len(modelo.fechas)} días completos; se necesitan al menos {DIAS_PRUEBA + DIAS_VALIDACION + 60}.")
+        destino.cerrar()
+        sys.exit(1)
+    print(f"Lecturas por hora: {len(horas):,} · días completos: {len(modelo.fechas)}"
+          f" ({modelo.fechas[0]} a {ultimo})")
+    print(f"  entrenamiento hasta {inicio_valid - timedelta(days=1)}")
+    print(f"  validación  emisiones {inicio_valid} a {inicio_prueba - timedelta(days=1)}")
+    print(f"  prueba      emisiones {inicio_prueba} a {ultimo - timedelta(days=1)}\n")
 
-    # 2) Modelo final: se reajusta con TODOS los días para pronosticar el futuro
-    coefs_finales = {sid: {v: ajustar(filas, v) for v in VARIABLES} for sid, filas in series.items()} \
-        if ganador == "LINEAR_REGRESSION" else {}
-    futuros = {}
-    for sid, filas in series.items():
-        historia = list(filas)
-        futuros[sid] = []
-        for k in range(DIAS_FUTUROS):
-            dia = historia[-1]["dia"] + timedelta(days=1)
-            p = pronostico(ganador, historia, coefs_finales.get(sid))
-            futuros[sid].append((dia, p))
-            historia.append({**p, "dia": dia})   # pronóstico recursivo: lo predicho alimenta el día siguiente
+    # 1) Evaluación sin trampa: phi estimado solo con el periodo de entrenamiento
+    phi_final = dict(modelo.phi)
+    modelo.phi = modelo.estimar_phi(inicio_valid - timedelta(days=1))
+    emisiones = {
+        "VALIDATION": [inicio_valid + timedelta(days=i) for i in range(DIAS_VALIDACION)],
+        "TEST": [inicio_prueba + timedelta(days=i) for i in range(DIAS_PRUEBA)],
+    }
+    pares = {division: M.evaluar(modelo, dias, HORIZONTE) for division, dias in emisiones.items()}
+    por_hora = M.evaluar_horas(modelo, emisiones["TEST"])
+    prueba_h1 = [(e, e + timedelta(days=1), modelo.pronostico_dia(e, e + timedelta(days=1)))
+                 for e in emisiones["TEST"] if e + timedelta(days=1) in modelo.dias]
 
-    print("\nPronóstico de los próximos 7 días (temperatura media °C / prob. lluvia %):")
-    for sid, dias in futuros.items():
-        lid = series[sid][0]["location_id"]
-        print(f"  {lid:<9} " + "  ".join(f"{d.strftime('%d/%m')} {p['temperature_mean_c']:.1f}/{p['rain_probability_pct']:.0f}%"
-                                     for d, p in dias))
-    total = sum(len(r["TEST"]) for r in resultados.values()) // len(METODOS)
-    if not confirmar(f"\n¿Guardar modelos, métricas, {total} predicciones de prueba con su evaluación "
-                     f"y {DIAS_FUTUROS * len(series)} predicciones futuras en PostgreSQL?", args.si):
+    for division in ("VALIDATION", "TEST"):
+        print(f"MAE temperatura media ({'validación' if division == 'VALIDATION' else 'prueba'}), °C por horizonte:")
+        print(f"  {'Método':<40}" + "".join(f"  día {k}" for k in range(1, HORIZONTE + 1)))
+        for metodo in METODOS:
+            valores = [M.errores(pares[division][metodo]["temperature_mean_c"][k])[0] for k in range(1, HORIZONTE + 1)]
+            print(f"  {METODOS[metodo]['name'][:40]:<40}" + "".join(f"{v:>7.2f}" if v is not None else "      -" for v in valores))
+        print()
+    mae_h, rmse_h, n_h = M.errores(por_hora["temperature_c"])
+    print(f"Por hora (día siguiente, prueba): MAE {mae_h:.2f} °C · RMSE {rmse_h:.2f} °C en {n_h} horas\n")
+
+    # 2) Pronóstico nuevo con toda la historia
+    modelo.phi = phi_final
+    futuro = modelo.pronostico()
+    print("Pronóstico publicado (modelo de climatología + anomalía):")
+    for d in futuro:
+        print(f"  {d['dia']:%a %d/%m}  mín {d['temperature_min_c']:5.1f}  máx {d['temperature_max_c']:5.1f}"
+              f"  lluvia {d['rain_probability_pct']:5.1f} % / {d['precipitation_total_mm']:.1f} mm"
+              f"  humedad {d['humidity_mean_pct']:.0f} %")
+    filas_horas = sum(len(d["horas"]) for d in futuro)
+    if not confirmar(f"\n¿Guardar 3 modelos, sus métricas por horizonte, {len(prueba_h1)} predicciones de prueba y"
+                     f" el pronóstico nuevo ({len(futuro)} días + {filas_horas} horas) en PostgreSQL?", args.si):
         print("Cancelado. No se escribió nada.")
         destino.cerrar()
         return
 
-    # 3) Guardar en PostgreSQL (una transacción)
+    # 3) Guardar (una transacción)
     try:
         version = datetime.now(timezone.utc).strftime("v%Y%m%d-%H%M%S")
         modelos = {alg: mid for mid, alg in destino.ejecutar(sql_modelos(), filas=destino.directo)} or {
             k: id_estable("modelo", k) for k in METODOS}
-        dataset = huella(series)
+        destino.ejecutar(f"UPDATE {S}.prediction_models SET is_active = false"
+                         f" WHERE algorithm NOT IN ({', '.join(t(k) for k in METODOS)})")
+        dataset = huella(modelo)
         corridas = {}
-        for metodo, r in resultados.items():
+        horas_entreno = sum(1 for h in modelo.horas if h["local"].date() < inicio_valid)
+        for metodo in METODOS:
             corridas[metodo] = str(uuid.uuid4())
-            hiper = {"ventana_dias": VENTANA, "ridge": RIDGE, "horizonte_dias": 1, "umbral_lluvia_mm": UMBRAL_LLUVIA_MM}
-            if metodo == "LINEAR_REGRESSION":
-                fuente = coefs_finales if metodo == ganador else r["coefs"]
-                hiper["coeficientes_b0_ayer_prom7"] = {
-                    series[sid][0]["location_id"]: {v: [round(c, 6) for c in cs] for v, cs in vs.items()}
-                    for sid, vs in fuente.items()}
-            registros = sum(1 for filas in series.values() for d in filas if d["dia"] < fin_entreno)
+            hiper = {"horizonte_dias": HORIZONTE, "dias_validacion": DIAS_VALIDACION, "dias_prueba": DIAS_PRUEBA,
+                     "publicado": metodo == PUBLICADO}
+            if metodo == PUBLICADO:
+                hiper.update(phi=phi_final, ventana_dias=M.VENTANA, dias_sesgo=M.DIAS_SESGO,
+                             dias_anomalia=M.DIAS_ANOMALIA, dias_perfil_horario=M.DIAS_PERFIL)
+            caracteristicas = (["normal_temporada_anio_anterior", "sesgo_30_dias", "anomalia_3_dias", "perfil_horario_30_dias"]
+                               if metodo == PUBLICADO else ["historial_diario"])
             destino.ejecutar(
                 f"INSERT INTO {S}.training_runs (training_run_id, model_id, version, status, started_at_utc,"
                 f" finished_at_utc, data_from_utc, data_until_utc, train_until_utc, validation_until_utc,"
                 f" test_until_utc, record_count, dataset_hash, dataset_uri, artifact_uri, hyperparameters, features)"
                 f" VALUES ({t(corridas[metodo])}, {t(modelos[metodo])}, {t(version)}, 'SUCCEEDED', now(),"
-                f" clock_timestamp(), {t(medianoche_utc(desde))}, {t(medianoche_utc(hasta))},"
-                f" {t(medianoche_utc(fin_entreno))}, {t(medianoche_utc(fin_valid))}, {t(medianoche_utc(hasta))},"
-                f" {registros}, {t(dataset)}, {t(f'postgresql://{config.POSTGRES_DB}/{S}.climate_aggregates?granularity=DAY')},"
-                f" NULL, {t(json.dumps(hiper, ensure_ascii=False))},"
-                f" {t(json.dumps(['valor_dia_anterior', 'promedio_7_dias'] if metodo == 'LINEAR_REGRESSION' else ['historial_diario']))})")
-            metricas = []
-            for division in ("VALIDATION", "TEST"):
-                if division == "TEST" and metodo == ganador:
-                    continue   # la prueba del ganador la calculan los SP 9 y 10 desde PostgreSQL
-                pares = r[division]
-                for sid in series:
-                    propios = [(a, b) for a, b in pares if a["series_id"] == sid]
-                    if not propios:
-                        continue
-                    inicio, fin = min(a["inicio"] for a, _ in propios), max(a["fin"] for a, _ in propios)
-                    for var, unidad in VARIABLES.items():
-                        for nombre, funcion in (("MAE", mae), ("RMSE", rmse)):
-                            valor, n = funcion(propios, var)
-                            metricas.append(f"({t(str(uuid.uuid4()))}, {t(corridas[metodo])}, {t(sid)}, {t(var)},"
-                                            f" {t(nombre)}, {t(division)}, 1440, 'DAY', {t(inicio)}, {t(fin)},"
-                                            f" {d6(valor)}, {n}, {t(unidad)})")
-            destino.ejecutar(
-                f"INSERT INTO {S}.model_metrics (metric_id, training_run_id, series_id, variable_name, metric_name,"
-                f" dataset_split, horizon_minutes, granularity, starts_at_utc, ends_at_utc, value, sample_count, unit)"
-                f" VALUES\n" + ",\n".join(metricas))
+                f" clock_timestamp(), {t(utc_texto(modelo.fechas[0]))}, {t(utc_texto(ultimo + timedelta(days=1)))},"
+                f" {t(utc_texto(inicio_valid))}, {t(utc_texto(inicio_prueba))}, {t(utc_texto(ultimo + timedelta(days=1)))},"
+                f" {max(horas_entreno, 1)}, {t(dataset)},"
+                f" {t(f'postgresql://{config.POSTGRES_DB}/{S}.observations?location_id={config.UBICACION_FIJA}')},"
+                f" NULL, {t(json.dumps(hiper, ensure_ascii=False))}, {t(json.dumps(caracteristicas))})")
 
-        # Predicciones de PRUEBA (del ganador); su evaluación y métricas las calculan los SP 9 y 10
-        corrida_prueba, corrida_futuro = str(uuid.uuid4()), str(uuid.uuid4())
-        predicciones = []
-        for real, p in resultados[ganador]["TEST"]:
-            predicciones.append(fila_prediccion(str(uuid.uuid4()), corridas[ganador], real["series_id"],
-                                                corrida_prueba, t(real["inicio"]), t(real["fin"]), p))
-        # Predicciones FUTURAS (se evaluarán cuando lleguen los datos reales)
-        for sid, dias in futuros.items():
-            zona = series[sid][0]["zona"]
-            for dia, p in dias:
-                inicio = f"('{dia.isoformat()}'::date::timestamp AT TIME ZONE {t(zona)})"
-                fin = f"('{(dia + timedelta(days=1)).isoformat()}'::date::timestamp AT TIME ZONE {t(zona)})"
-                predicciones.append(fila_prediccion(str(uuid.uuid4()), corridas[ganador], sid, corrida_futuro,
-                                                    inicio, fin, p))
+        metricas = []
+        for division, resultado in pares.items():
+            for metodo in METODOS:
+                for var in M.VARIABLES_EVALUADAS:
+                    for k, lista in resultado[metodo][var].items():
+                        if metodo == PUBLICADO and division == "TEST" and k == 1:
+                            continue   # la calculan los SP 9 y 10 desde las predicciones guardadas
+                        mae, rmse, n = M.errores(lista)
+                        if not n:
+                            continue
+                        dias = [e + timedelta(days=k) for e in emisiones[division]]
+                        for nombre, valor in (("MAE", mae), ("RMSE", rmse)):
+                            metricas.append(
+                                f"({t(str(uuid.uuid4()))}, {t(corridas[metodo])}, {t(sid)}, {t(var)}, {t(nombre)},"
+                                f" {t(division)}, {1440 * k}, 'DAY', {t(utc_texto(min(dias)))},"
+                                f" {t(utc_texto(max(dias) + timedelta(days=1)))}, {d6(valor)}, {n}, {t(UNIDADES[var])})")
+        for var, lista in por_hora.items():
+            mae, rmse, n = M.errores(lista)
+            if n:
+                for nombre, valor in (("MAE", mae), ("RMSE", rmse)):
+                    metricas.append(
+                        f"({t(str(uuid.uuid4()))}, {t(corridas[PUBLICADO])}, {t(sid)}, {t(var)}, {t(nombre)},"
+                        f" 'TEST', 1440, 'HOUR', {t(utc_texto(inicio_prueba + timedelta(days=1)))},"
+                        f" {t(utc_texto(ultimo + timedelta(days=1)))}, {d6(valor)}, {n}, {t(UNIDADES[var])})")
         destino.ejecutar(
-            f"INSERT INTO {S}.predictions (prediction_id, training_run_id, series_id, forecast_run_id, issued_at_utc,"
-            f" target_start_utc, target_end_utc, granularity, temperature_min_c, temperature_max_c,"
-            f" temperature_mean_c, humidity_pct, rain_probability_pct, rainfall_mm) VALUES\n" + ",\n".join(predicciones))
+            f"INSERT INTO {S}.model_metrics (metric_id, training_run_id, series_id, variable_name, metric_name,"
+            f" dataset_split, horizon_minutes, granularity, starts_at_utc, ends_at_utc, value, sample_count, unit)"
+            f" VALUES\n" + ",\n".join(metricas))
+
+        corrida_prueba, corrida_futuro = str(uuid.uuid4()), str(uuid.uuid4())
+        predicciones = [fila_prediccion(corridas[PUBLICADO], sid, corrida_prueba, inicio_dia(dia, zona),
+                                        inicio_dia(dia + timedelta(days=1), zona), "DAY", de_dia(p))
+                        for _, dia, p in prueba_h1]
+        for d in futuro:
+            predicciones.append(fila_prediccion(corridas[PUBLICADO], sid, corrida_futuro, inicio_dia(d["dia"], zona),
+                                                inicio_dia(d["dia"] + timedelta(days=1), zona), "DAY", de_dia(d)))
+            for h in d["horas"]:
+                predicciones.append(fila_prediccion(corridas[PUBLICADO], sid, corrida_futuro,
+                                                    inicio_hora(h["local"], zona),
+                                                    inicio_hora(h["local"] + timedelta(hours=1), zona), "HOUR", de_hora(h)))
+        for i in range(0, len(predicciones), 200):
+            destino.ejecutar(
+                f"INSERT INTO {S}.predictions (prediction_id, training_run_id, series_id, forecast_run_id,"
+                f" issued_at_utc, target_start_utc, target_end_utc, granularity, temperature_min_c, temperature_max_c,"
+                f" temperature_mean_c, humidity_pct, rain_probability_pct, rainfall_mm) VALUES\n"
+                + ",\n".join(predicciones[i:i + 200]))
         (evaluadas,) = p5.llamar(destino, "sp_evaluar_predicciones", t(corrida_prueba), "NULL")
         (filas_metricas,) = p5.llamar(destino, "sp_calcular_metricas", t(corrida_prueba), "'TEST'", "NULL")
         destino.commit()
@@ -305,18 +272,12 @@ def main():
         print(f"\nNo se guardó nada (se revirtió): {type(error).__name__}: {error}")
         sys.exit(1)
     destino.cerrar()
-    print(f"\nGuardado: 3 modelos, 3 corridas de entrenamiento ({version}), métricas MAE y RMSE,"
-          f" {DIAS_FUTUROS * len(series)} predicciones futuras.")
-    print(f"Stored procedures: sp_evaluar_predicciones evaluó {int(evaluadas)} predicciones de prueba;"
-          f" sp_calcular_metricas guardó {int(filas_metricas)} métricas (MAE y RMSE) del ganador.")
-    print(f"Corrida futura (forecast_run_id): {corrida_futuro}")
+    print(f"\nGuardado ({version}): 3 corridas de entrenamiento, {len(metricas)} métricas MAE/RMSE por horizonte,"
+          f" {len(prueba_h1)} predicciones de prueba y el pronóstico nuevo ({len(futuro)} días + {filas_horas} horas).")
+    print(f"Stored procedures: sp_evaluar_predicciones evaluó {int(evaluadas)} días de prueba;"
+          f" sp_calcular_metricas guardó {int(filas_metricas)} métricas del día 1.")
+    print(f"Corrida del pronóstico (forecast_run_id): {corrida_futuro}")
     print("Revisa los resultados con etl/consultas_prediccion.sql en DBeaver.")
-
-
-def fila_prediccion(pid, corrida, sid, pronostico_id, inicio_sql, fin_sql, p):
-    return (f"({t(pid)}, {t(corrida)}, {t(sid)}, {t(pronostico_id)}, now(), {inicio_sql}, {fin_sql}, 'DAY',"
-            f" {d6(p['temperature_min_c'])}, {d6(p['temperature_max_c'])}, {d6(p['temperature_mean_c'])},"
-            f" {d6(p['humidity_mean_pct'])}, {d6(p['rain_probability_pct'])}, {d6(p['precipitation_total_mm'])})")
 
 
 if __name__ == "__main__":

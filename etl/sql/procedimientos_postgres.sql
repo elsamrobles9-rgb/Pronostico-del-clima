@@ -1,8 +1,8 @@
 -- =====================================================================================
--- AWS Clima V2 · 10 Stored Procedures de la capa analítica (PostgreSQL, climate_analytics)
+-- AWS Clima V2 · 11 Stored Procedures de la capa analítica (PostgreSQL, climate_analytics)
 -- Transformación, limpieza, agregación, evaluación de predicciones y métricas.
 --
--- Cómo instalar: DBeaver -> conexión PostgreSQL -> abrir este archivo -> Alt+X (ejecutar script).
+-- Cómo instalar: .\.venv\Scripts\python.exe etl\instalar_sp.py  (o DBeaver -> PostgreSQL -> Alt+X).
 -- Se puede ejecutar más de una vez: usa CREATE OR REPLACE e IF NOT EXISTS.
 -- Requiere PostgreSQL 13 o superior (gen_random_uuid).
 -- =====================================================================================
@@ -481,7 +481,71 @@ BEGIN
     GET DIAGNOSTICS p_filas = ROW_COUNT;
 END $$;
 
--- Verificación: deben aparecer 10 procedimientos (PROCEDURE) y 2 funciones auxiliares.
+-- =====================================================================================
+-- SP 11 · Inserta o actualiza lecturas que llegan del portal (alta, edición o archivo
+-- CSV/JSON) sin esperar al ETL. Recorre el mismo camino que un lote del ETL:
+-- staging -> validación -> condición -> upsert -> promedios diarios -> cierre del lote,
+-- así las reglas son idénticas. p_lecturas = arreglo JSON con los registros tal como
+-- los devuelve DynamoDB (1 a 500). El ETL posterior los ve iguales y los omite.
+-- =====================================================================================
+CREATE OR REPLACE PROCEDURE climate_analytics.sp_upsert_lecturas(
+    p_lecturas jsonb, p_origen text, p_fuentes text[], p_condiciones text[],
+    INOUT p_batch_id uuid, INOUT p_insertados int, INOUT p_actualizados int,
+    INOUT p_omitidos int, INOUT p_rechazados int)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_total int;
+    v_validos int;
+    v_calculadas int;
+    v_dias_nuevos int;
+    v_dias_actualizados int;
+    v_evaluadas int;
+BEGIN
+    IF p_lecturas IS NULL OR jsonb_typeof(p_lecturas) <> 'array' THEN
+        RAISE EXCEPTION 'p_lecturas debe ser un arreglo JSON';
+    END IF;
+    v_total := jsonb_array_length(p_lecturas);
+    IF v_total = 0 OR v_total > 500 THEN
+        RAISE EXCEPTION 'Se aceptan de 1 a 500 lecturas por llamada (llegaron %)', v_total;
+    END IF;
+    IF p_origen IS NULL OR p_origen !~ '^[a-z0-9_-]{1,30}$' THEN
+        RAISE EXCEPTION 'Origen no válido: %', p_origen;
+    END IF;
+
+    p_batch_id := NULL;
+    CALL climate_analytics.sp_iniciar_lote('incremental', NULL, 'portal-' || p_origen, p_batch_id);
+
+    INSERT INTO climate_analytics.stg_observations
+        (batch_id, fila, location_id, station_id, timestamp_utc, source_record_id, source_version,
+         content_hash, last_event_id, source_id, condition_id, condition_origin,
+         temperature_c, feels_like_c, humidity_pct, pressure_hpa, wind_speed_kmh, precipitation_mm,
+         cloud_cover_pct, visibility_km, uv_index, dew_point_c, wind_direction,
+         precipitation_period_minutes, received_at_utc, updated_at_utc)
+    SELECT p_batch_id, r.fila::int, r.j->>'location_id', r.j->>'station_id', r.j->>'timestamp_utc',
+           r.j->>'record_id', (r.j->>'version')::int, r.j->>'content_hash', r.j->>'transaction_id',
+           r.j->>'source_id', r.j->>'condition_id', r.j->>'condition_origin',
+           (r.j->>'temperature_c')::numeric, (r.j->>'feels_like_c')::numeric,
+           (r.j->>'humidity_pct')::numeric, (r.j->>'pressure_hpa')::numeric,
+           (r.j->>'wind_speed_kmh')::numeric, (r.j->>'precipitation_mm')::numeric,
+           (r.j->>'cloud_cover_pct')::numeric, (r.j->>'visibility_km')::numeric,
+           (r.j->>'uv_index')::numeric, (r.j->>'dew_point_c')::numeric, r.j->>'wind_direction',
+           (r.j->>'precipitation_period_minutes')::int, r.j->>'created_at_utc', r.j->>'updated_at_utc'
+    FROM jsonb_array_elements(p_lecturas) WITH ORDINALITY AS r(j, fila);
+
+    CALL climate_analytics.sp_validar_staging(p_batch_id, p_fuentes, p_condiciones, v_validos, p_rechazados);
+    CALL climate_analytics.sp_clasificar_condiciones(p_batch_id, false, v_calculadas);
+    CALL climate_analytics.sp_cargar_observaciones(p_batch_id, p_insertados, p_actualizados, p_omitidos);
+    CALL climate_analytics.sp_calcular_agregados_diarios(v_dias_nuevos, v_dias_actualizados);
+    CALL climate_analytics.sp_evaluar_predicciones(NULL::uuid, v_evaluadas);
+    CALL climate_analytics.sp_cerrar_lote(
+        p_batch_id, 'SUCCEEDED', v_total, p_insertados, p_actualizados, p_omitidos, p_rechazados,
+        jsonb_build_object('modo', 'portal', 'origen', p_origen, 'validos', v_validos,
+                           'condiciones_calculadas', v_calculadas, 'dias_nuevos', v_dias_nuevos,
+                           'dias_actualizados', v_dias_actualizados, 'evaluadas', v_evaluadas),
+        NULL);
+END $$;
+
+-- Verificación: deben aparecer 11 procedimientos (PROCEDURE) y 2 funciones auxiliares.
 SELECT routine_type AS tipo, routine_name AS nombre
 FROM information_schema.routines
 WHERE routine_schema = 'climate_analytics'
