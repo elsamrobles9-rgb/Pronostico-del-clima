@@ -199,7 +199,33 @@ class VercelTests(unittest.TestCase):
             self.assertEqual(web.config["CLIMATE_MODE"], "api")
             self.assertEqual(web.secret_key, "s" * 40)
             self.assertTrue(web.config["SESSION_COOKIE_SECURE"])
+            self.assertEqual(web.config["SESSION_COOKIE_SAMESITE"], "Lax")
             self.assertEqual(web.extensions["auth_store"].kind, "mysql (API)")
+
+    def test_vercel_lee_formularios_sin_content_length(self):
+        """Simula una plataforma que entrega el cuerpo sin CONTENT_LENGTH: el login debe leer el csrf."""
+        import io
+        import tempfile
+        from test_aws_features import RecordingAnalytics, mysql_double
+        temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.addCleanup(temp.cleanup)
+        store = mysql_double(temp.name + "/m.db", self)
+        store.save_admin("admin@example.com", "Admin", PASSWORD)
+        partes, _, _ = pila_remota(store, DemoClient(seed=False), RecordingAnalytics())
+        with mock.patch.dict(os.environ, {"VERCEL": "1", "CLIMA_API_URL": "https://x.execute-api.us-east-1.amazonaws.com",
+                                          "CLIMA_SECRET_KEY": "s" * 40}), \
+                mock.patch.object(modulo_app, "remote_backend", return_value=(partes, None)):
+            web = modulo_app.crear_app_desde_entorno()
+        cliente = web.test_client()
+        html = cliente.get("/login", base_url="https://portal.example").get_data(as_text=True)
+        self.assertIn("Email", html)
+        with cliente.session_transaction(base_url="https://portal.example") as s:
+            csrf = s["csrf"]
+        cuerpo = f"csrf={csrf}&username=admin%40example.com&password={PASSWORD}".encode()
+        r = cliente.post("/login", base_url="https://portal.example", input_stream=io.BytesIO(cuerpo),
+                         content_type="application/x-www-form-urlencoded",
+                         environ_overrides={"CONTENT_LENGTH": ""})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers["Location"].endswith("/records"))
 
 
 del ApiTests, WebTests   # que no se ejecuten dos veces desde este archivo

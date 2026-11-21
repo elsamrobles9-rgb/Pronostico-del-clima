@@ -160,6 +160,9 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             expected = session.get("csrf", "")
             actual = request.form.get("csrf", "")
             if not expected or not secrets.compare_digest(expected.encode(), actual.encode()):
+                app.logger.warning("CSRF rechazado: token en la sesion=%s, token en el formulario=%s, "
+                                   "cookies recibidas=%s, content-length=%s", bool(expected), bool(actual),
+                                   sorted(request.cookies), request.content_length)
                 abort(400, "Invalid form token. Reload the page and try again.")
             if any(len(request.form.getlist(k)) != 1 for k in request.form):
                 abort(400, "Duplicate form fields are not allowed.")
@@ -439,8 +442,26 @@ def crear_app_desde_entorno():
         return fallo
     partes, _ = remote_backend(url)
     web = create_app(mode="api", auth_path="/tmp/portal.sqlite3", secret_key=secreto, **partes)
-    web.config.update(SESSION_COOKIE_SECURE=True)
+    # Lax: la cookie viaja al navegar dentro del sitio y sigue sin enviarse en POST desde otros sitios.
+    web.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_SAMESITE="Lax")
+    web.wsgi_app = CuerpoCompleto(web.wsgi_app)
     return web
+
+
+class CuerpoCompleto:
+    """Si la plataforma entrega el cuerpo de la petición sin CONTENT_LENGTH, Flask no lee el formulario.
+    Este envoltorio lo lee completo y pone la longitud."""
+
+    def __init__(self, siguiente):
+        self.siguiente = siguiente
+
+    def __call__(self, environ, start_response):
+        if environ.get("REQUEST_METHOD") in ("POST", "PUT", "PATCH", "DELETE") and not environ.get("CONTENT_LENGTH"):
+            import io
+            cuerpo = environ["wsgi.input"].read() or b""
+            environ["wsgi.input"] = io.BytesIO(cuerpo)
+            environ["CONTENT_LENGTH"] = str(len(cuerpo))
+        return self.siguiente(environ, start_response)
 
 
 # Vercel busca, en este archivo, una variable "app" de nivel superior que sea una aplicación Flask.
