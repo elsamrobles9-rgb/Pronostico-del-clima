@@ -79,11 +79,21 @@ def sample():
                 cloud_cover_pct=15.5, visibility_km=10, uv_index=3.2, dew_point_c=17.6)
 
 class DemoClient(Client):
-    def __init__(self, seed=True):
+    def __init__(self, seed=True, records=None):
         self.table = MemoryTable()
         self.service = ReadingService(self.table)
         self.lock = threading.RLock()
-        if seed: self.create(sample())
+        self.loaded = self.rejected = 0
+        if records is not None: self.load(records)
+        elif seed: self.create(sample())
+    def load(self, records):
+        """Carga lecturas reales en memoria con las mismas reglas que las Lambdas (versión 1 y huella)."""
+        for record in records:
+            try:
+                self.create(record)
+                self.loaded += 1
+            except ApiError:
+                self.rejected += 1
     def call(self, operation, data):
         event = {"queryStringParameters": data} if operation == "read" else {"body": dumps(data)}
         # Serialize the full read/compare/write cycle in this single-process demo.

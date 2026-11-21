@@ -4,7 +4,7 @@
 <header class="pub-header"><a class="brand" href="{{ url_for('public_home') }}">◈ Clima CDMX</a><span class="muted">Ciudad de México · Pronóstico del sistema</span>
 <a class="button light" href="{{ url_for('index') if current_user else url_for('login') }}">{{ 'Panel de administración' if current_user else 'Acceso administrador' }}</a></header>
 <main class="pub">
-{% if mode == 'demo' %}<div class="notice">Modo demo · datos sintéticos de ejemplo · sin AWS</div>{% endif %}
+{% if mode == 'demo' and datos_reales %}<div class="notice">Modo sin conexión · {{ '{:,}'.format(datos_reales) }} lecturas reales de Open-Meteo (CDMX) cargadas desde esta laptop · sin AWS</div>{% elif mode == 'demo' %}<div class="notice">Modo demo · datos sintéticos de ejemplo · sin AWS</div>{% endif %}
 {% if problem %}<div class="alert error" role="alert">{{ problem }}</div>{% else %}{% set a = data.actual %}
 <section class="actual-grid">
 {% if a %}<div class="actual">

@@ -9,3 +9,11 @@ etl/respaldos/
 *.pem
 .env
 *.zip
+aws_opcion_a/salida.json
+
+# Documentos de trabajo
+INSTRUCCIONES_*.md
+TEST_RESULTS.txt
+README_ES.md
+etl/README_ES.md
+*.pdf

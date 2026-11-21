@@ -1,0 +1,15 @@
+# Lo que NO sube a Vercel (el portal solo necesita app.py, services/, prediccion/, templates/, public/)
+.venv/
+venv/
+__pycache__/
+*.pyc
+instance/
+etl/
+tests/
+backend/
+aws_opcion_a/
+postman/
+sql/
+*.zip
+*.pem
+.env

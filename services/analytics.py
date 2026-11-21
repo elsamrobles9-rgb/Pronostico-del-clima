@@ -8,12 +8,14 @@
   climate_analytics.sp_upsert_lecturas para que PostgreSQL las tenga sin esperar al ETL.
 
 Modo demo: usa la historia sintética de prediccion/demo.py (sin AWS).
+Modo demo con --datos-reales: usa las lecturas reales de etl/datos/lecturas.jsonl (sin AWS ni internet).
 """
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
-from contract import dumps
+from contract import dumps, load_json
 from prediccion import demo
 from prediccion import modelo as M
 from services.catalog import FIXED_LOCATION
@@ -145,13 +147,48 @@ class BaseAnalytics:
             lluvia=round(float(lectura.get("precipitation_mm") or 0), 1))
 
 
+CAMPOS_HORA = ("temperature_c", "feels_like_c", "humidity_pct", "precipitation_mm", "wind_speed_kmh",
+               "wind_direction", "uv_index", "cloud_cover_pct", "condition_id")
+
+
+def hora_desde_lectura(lectura):
+    """Lectura del contrato V2 (como en DynamoDB o en lecturas.jsonl) -> fila que usa el modelo."""
+    texto = str(lectura["timestamp_utc"]).replace("Z", "+00:00")
+    fila = {"ts_utc": datetime.fromisoformat(texto).astimezone(timezone.utc)}
+    for campo in CAMPOS_HORA:
+        valor = lectura.get(campo)
+        fila[campo] = float(valor) if isinstance(valor, (Decimal, int)) and not isinstance(valor, bool) else valor
+    return fila
+
+
+def leer_lecturas(ruta, ubicacion=FIXED_LOCATION):
+    """Lee etl/datos/lecturas.jsonl (lo generó el paso 2) y deja solo las lecturas de la CDMX."""
+    lecturas = []
+    with open(ruta, encoding="utf-8") as archivo:
+        for linea in archivo:
+            if linea.strip():
+                lectura = load_json(linea)
+                if isinstance(lectura, dict) and lectura.get("location_id") == ubicacion:
+                    lecturas.append(lectura)
+    if not lecturas:
+        raise ValueError(f"{ruta} no tiene lecturas de {ubicacion}.")
+    lecturas.sort(key=lambda r: hora_desde_lectura(r)["ts_utc"])
+    return lecturas
+
+
 class DemoAnalytics(BaseAnalytics):
     kind = "demo"
 
-    def __init__(self, horas=None):
+    def __init__(self, horas=None, datos_reales=False):
         super().__init__()
-        self.horas = horas or demo.historia()
+        self.datos_reales = datos_reales
+        self.horas = sorted(horas, key=lambda h: h["ts_utc"]) if horas else demo.historia()
         self.sincronizadas = []
+
+    @classmethod
+    def desde_lecturas(cls, lecturas):
+        """Página pública con las lecturas reales (mismo modelo que en AWS, sin conexión)."""
+        return cls([hora_desde_lectura(r) for r in lecturas], datos_reales=True)
 
     def historial(self):
         return self.horas
@@ -161,6 +198,16 @@ class DemoAnalytics(BaseAnalytics):
 
     def upsert(self, records, origen, fuentes, condiciones):
         self.sincronizadas.append((origen, len(records)))
+        if self.datos_reales and records:
+            # Hace lo que sp_upsert_lecturas hace en AWS: el pronóstico toma en cuenta lo nuevo o editado.
+            with self.lock:
+                por_hora = {h["ts_utc"]: h for h in self.horas}
+                for record in records:
+                    if record.get("location_id", FIXED_LOCATION) == FIXED_LOCATION:
+                        fila = hora_desde_lectura(record)
+                        por_hora[fila["ts_utc"]] = fila
+                self.horas = sorted(por_hora.values(), key=lambda h: h["ts_utc"])
+            self.invalidar()
         return None   # en demo no hay PostgreSQL
 
 

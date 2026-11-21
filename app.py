@@ -5,6 +5,8 @@ Administrators:         /records, /add, /edit, /delete, /import, /admin/users, /
                         /account/password and the REST API (/api, Bearer JWT).
 
 Demo mode:  python app.py                 (sample data, local accounts, no AWS)
+Offline:    python app.py --datos-reales  (the 10,000 real readings from etl/datos/lecturas.jsonl, no AWS)
+Option A:   python app.py --mode api --api-url https://...amazonaws.com  (no AWS credentials; also on Vercel)
 AWS mode:   python app.py --mode lambda   (Lambdas + DynamoDB; users/sessions/audit/catalogs in MySQL;
                                            readings and forecast data in PostgreSQL;
                                            Idempotency-Key in DynamoDB ClimateIdempotency)
@@ -44,9 +46,10 @@ KEYS = ("location_id", "timestamp_utc")
 PUBLIC_PAGES = ('public_home', 'login')
 
 
-def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempotency=None, analytics=None):
+def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempotency=None, analytics=None,
+               secret_key=None):
     app = Flask(__name__)
-    app.secret_key = secrets.token_hex(32)
+    app.secret_key = secret_key or secrets.token_hex(32)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", MAX_CONTENT_LENGTH=300000,
                       CLIMATE_MODE=mode)
     client = client if client is not None else DemoClient()
@@ -93,8 +96,9 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
     @app.context_processor
     def context():
         if "csrf" not in session: session["csrf"] = secrets.token_urlsafe(32)
+        reales = len(analytics.horas) if getattr(analytics, "datos_reales", False) else 0
         return dict(csrf=session["csrf"], mode=mode, fields=FIELDS, current_user=g.get("user"),
-                    users_store=store.kind)
+                    users_store=store.kind, datos_reales=reales)
 
     @app.errorhandler(DatabaseUnavailable)
     def database_down(exc):
@@ -410,14 +414,69 @@ def idempotency_store(region):
         return MemoryIdempotency()
 
 
+def remote_backend(url):
+    """Opción A: todo pasa por API Gateway; sin credenciales de AWS ni contraseñas de las bases."""
+    from services.remoto import (ApiRemota, RemoteAnalytics, RemoteClient, RemoteIdempotency,
+                                 RemoteStore)
+    api = ApiRemota(url)
+    return dict(client=RemoteClient(api), auth_store=RemoteStore(api), analytics=RemoteAnalytics(api),
+                idempotency=RemoteIdempotency(api)), api
+
+
+def crear_app_desde_entorno():
+    """Vercel: la app se arma con variables de entorno (CLIMA_API_URL y CLIMA_SECRET_KEY)."""
+    if not os.environ.get("VERCEL"):
+        return None
+    url, secreto = os.environ.get("CLIMA_API_URL", ""), os.environ.get("CLIMA_SECRET_KEY", "")
+    if not url or len(secreto) < 32:
+        fallo = Flask(__name__)
+
+        @fallo.route("/", defaults={"ruta": ""})
+        @fallo.route("/<path:ruta>")
+        def sin_configurar(ruta):
+            return ("Falta configurar CLIMA_API_URL y CLIMA_SECRET_KEY (32+ caracteres) en "
+                    "Vercel → Settings → Environment Variables, y luego Redeploy."), 503
+        return fallo
+    partes, _ = remote_backend(url)
+    web = create_app(mode="api", auth_path="/tmp/portal.sqlite3", secret_key=secreto, **partes)
+    web.config.update(SESSION_COOKIE_SECURE=True)
+    return web
+
+
+# Vercel busca una variable "app" con la aplicación Flask. En tu PC vale None y se usa main().
+app = crear_app_desde_entorno()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("demo", "lambda"), default="demo")
+    parser.add_argument("--mode", choices=("demo", "lambda", "api"), default="demo",
+                        help="api = opción A: solo la URL de API Gateway, sin credenciales de AWS")
+    parser.add_argument("--api-url", default=os.environ.get("CLIMA_API_URL", ""),
+                        help="URL de API Gateway para --mode api (o variable CLIMA_API_URL)")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--users", choices=("auto", "local", "mysql"), default="auto",
                         help="where accounts live (auto: MySQL in lambda mode, local SQLite in demo)")
     parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--datos-reales", action="store_true",
+                        help="demo sin internet con las lecturas reales de etl/datos/lecturas.jsonl")
+    parser.add_argument("--lecturas", default=str(Path(__file__).parent / "etl" / "datos" / "lecturas.jsonl"),
+                        help="archivo de lecturas para --datos-reales")
     args = parser.parse_args()
+    if args.datos_reales and args.mode != "demo":
+        sys.exit("--datos-reales solo funciona en modo demo: python app.py --datos-reales")
+    if args.mode == "api":
+        if not args.api_url:
+            sys.exit("Falta la URL de la API: python app.py --mode api --api-url https://xxxx.execute-api.us-east-1.amazonaws.com")
+        try:
+            partes, api = remote_backend(args.api_url)
+            estado = api.llamar("estado")
+        except Exception as exc:
+            sys.exit(f"No se pudo usar la API: {exc}\nRevisa que el laboratorio y las 2 RDS estén encendidos.")
+        print(f"API de AWS lista (opción A, sin credenciales): {estado['mysql_admins']} administrador(es) en MySQL, "
+              f"{estado['postgres_lecturas']:,} lecturas en PostgreSQL.")
+        print(f'Página pública: http://127.0.0.1:{args.port}   Administración: http://127.0.0.1:{args.port}/login')
+        create_app(mode="api", **partes).run(host="127.0.0.1", port=args.port, debug=False, load_dotenv=False)
+        sys.exit(0)
     use_mysql = args.users == "mysql" or (args.users == "auto" and args.mode == "lambda")
     try:
         users = mysql_store(args.region) if use_mysql else None
@@ -427,6 +486,19 @@ if __name__ == "__main__":
         print('Revisa: RDS encendidas, tu IP en el security group, usuario y contraseña, credenciales del lab.')
         sys.exit(1)
     backend = DemoClient() if args.mode == "demo" else LambdaClient(args.region)
+    if args.datos_reales:
+        from services.analytics import leer_lecturas
+        try:
+            lecturas = leer_lecturas(args.lecturas)
+        except (OSError, ValueError) as exc:
+            sys.exit(f"No se pudieron leer las lecturas reales: {exc}\n"
+                     "Debe existir etl/datos/lecturas.jsonl (lo genera etl/paso2_transformar.py).")
+        print(f"Cargando {len(lecturas):,} lecturas reales en memoria (sin AWS ni internet)...")
+        analytics = DemoAnalytics.desde_lecturas(lecturas)
+        backend = DemoClient(records=lecturas)
+        print(f"Listo: {backend.loaded:,} lecturas de {lecturas[0]['timestamp_utc']} a {lecturas[-1]['timestamp_utc']}"
+              + (f" ({backend.rejected} no pasaron la validación)" if backend.rejected else ""))
+        print("Los cambios que hagas se guardan solo en memoria y se pierden al cerrar el portal.")
     idem = idempotency_store(args.region) if args.mode == "lambda" else MemoryIdempotency()
     print(f'Página pública: http://127.0.0.1:{args.port}   Administración: http://127.0.0.1:{args.port}/login')
     create_app(backend, args.mode, auth_store=users, idempotency=idem, analytics=analytics).run(
