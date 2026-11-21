@@ -106,7 +106,11 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
 
     @app.before_request
     def authorize():
-        if request.blueprint == 'api' or request.endpoint in ('static', 'health'): return
+        if request.blueprint == 'api' or request.endpoint in ('static', 'health', 'favicon'): return
+        # Rutas que no existen (robots.txt, apple-touch-icon.png...): 404 normal, sin tocar la sesión.
+        # Antes se trataban como páginas protegidas: borraban la sesión y el login fallaba con
+        # "Invalid form token" porque el navegador pide /favicon.ico mientras muestra el formulario.
+        if request.endpoint is None: return
         try:
             g.user = store.user(session.get('sid', ''))
         except DatabaseUnavailable:
@@ -114,12 +118,15 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             else: raise
         if request.endpoint in PUBLIC_PAGES: return
         if not g.user:
-            session.clear()
+            session.pop('sid', None)       # se quita la sesión vencida; el token del formulario se conserva
             return redirect(url_for('login'))
         if g.user['role'] != 'ADMIN': abort(403)
 
     @app.get('/health')
     def health(): return {'status': 'ok'}
+
+    @app.get('/favicon.ico')
+    def favicon(): return '', 204
 
     # ------------------------------------------------------------------ public weather page (visitors)
     @app.get('/')

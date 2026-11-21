@@ -77,6 +77,18 @@ class RemoteWebTests(WebTests):
         self.app.testing = True
         self.web = self.app.test_client()
 
+    def test_peticiones_del_navegador_no_rompen_el_login(self):
+        """El navegador pide /favicon.ico y otras rutas mientras muestra el login: el token debe seguir valiendo."""
+        self.web.get("/login")
+        token = self.csrf()
+        self.assertEqual(self.web.get("/favicon.ico").status_code, 204)
+        self.assertEqual(self.web.get("/robots.txt").status_code, 404)
+        self.assertEqual(self.web.get("/apple-touch-icon.png").status_code, 404)
+        self.web.get("/records")                       # página protegida sin sesión: manda al login
+        r = self.web.post("/login", data={"csrf": token, "username": "admin@example.com", "password": PASSWORD})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers["Location"].endswith("/records"))
+
     def test_aviso_modo_api(self):
         self.assertIn("AWS API · option A", self.web.get("/login").get_data(as_text=True))
 
