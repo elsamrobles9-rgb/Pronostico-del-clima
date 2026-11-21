@@ -174,6 +174,17 @@ class VercelTests(unittest.TestCase):
             os.environ.pop("VERCEL", None)
             self.assertIsNone(modulo_app.crear_app_desde_entorno())
 
+    def test_app_py_tiene_app_flask_de_nivel_superior(self):
+        """Lo que revisa Vercel al construir: app.py define app = Flask(...) arriba del todo."""
+        import ast
+        from flask import Flask
+        from pathlib import Path
+        arbol = ast.parse(Path(modulo_app.__file__).read_text(encoding="utf-8"))
+        nombres = [t.id for n in arbol.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)]
+        self.assertIn("app", nombres)
+        self.assertIn("app = Flask(__name__)", Path(modulo_app.__file__).read_text(encoding="utf-8"))
+        self.assertIsInstance(modulo_app.app, Flask)
+
     def test_vercel_sin_configurar_avisa(self):
         with mock.patch.dict(os.environ, {"VERCEL": "1", "CLIMA_API_URL": "", "CLIMA_SECRET_KEY": ""}):
             web = modulo_app.crear_app_desde_entorno().test_client()

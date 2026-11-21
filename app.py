@@ -443,8 +443,12 @@ def crear_app_desde_entorno():
     return web
 
 
-# Vercel busca una variable "app" con la aplicación Flask. En tu PC vale None y se usa main().
-app = crear_app_desde_entorno()
+# Vercel busca, en este archivo, una variable "app" de nivel superior que sea una aplicación Flask.
+# En Vercel se reemplaza por el portal real (modo API); en tu PC se usa main() y esta queda sin uso.
+app = Flask(__name__)
+_portal_vercel = crear_app_desde_entorno()
+if _portal_vercel is not None:
+    app = _portal_vercel
 
 
 if __name__ == "__main__":
