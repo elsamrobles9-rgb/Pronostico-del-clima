@@ -1,43 +1,54 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clima en la Ciudad de México</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
-<body class="publico">{% from 'weather_icons.html' import wx, flecha %}
-<header class="pub-header"><a class="brand" href="{{ url_for('public_home') }}">◈ Clima CDMX</a><span class="muted">Ciudad de México · Pronóstico del sistema</span>
-<a class="button light" href="{{ url_for('index') if current_user else url_for('login') }}">{{ 'Panel de administración' if current_user else 'Acceso administrador' }}</a></header>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mexico City Weather</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body class="publico">{% from 'weather_icons.html' import wx, flecha %}{% from 'icons.html' import icon %}<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+<symbol id="error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
+<symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></symbol>
+<symbol id="table" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M10 5v14"/></symbol>
+<symbol id="calendar" viewBox="0 0 24 24"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
+<header class="ad-header"><div class="ad-header-in">
+<a class="ad-brand" href="{{ url_for('public_home') }}">◆ CDMX Weather</a>
+<span class="ad-pill">Mexico City</span>
+{% if mode == 'demo' %}<span class="ad-pill modo">{{ 'Offline · real data' if datos_reales else 'Demo mode' }}</span>{% endif %}
+<a class="ad-btn {{ 'primario' if current_user else '' }} pub-acceso" href="{{ url_for('inicio') if current_user else url_for('login') }}">{{ icon('table') if current_user else icon('key') }} {{ 'Admin panel' if current_user else 'Admin sign-in' }}</a>
+</div></header>
 <main class="pub">
-{% if mode == 'demo' and datos_reales %}<div class="notice">Modo sin conexión · {{ '{:,}'.format(datos_reales) }} lecturas reales de Open-Meteo (CDMX) cargadas desde esta laptop · sin AWS</div>{% elif mode == 'demo' %}<div class="notice">Modo demo · datos sintéticos de ejemplo · sin AWS</div>{% endif %}
-{% if problem %}<div class="alert error" role="alert">{{ problem }}</div>{% else %}{% set a = data.actual %}
+{% if mode == 'demo' and datos_reales %}<div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Offline mode</span>{{ '{:,}'.format(datos_reales) }} real Open-Meteo readings (Mexico City) loaded from this computer. AWS is not used.</span></div>{% elif mode == 'demo' %}<div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Demo mode</span>Synthetic sample data. AWS is not used.</span></div>{% endif %}
+{% if problem %}<div class="ad-alerta error" role="alert">{{ icon('error') }}<span class="cuerpo"><span class="titulo">The weather could not be shown</span>{{ problem|explicar }}</span></div>{% else %}{% set a = data.actual %}
 <section class="actual-grid">
 {% if a %}<div class="actual">
-  <p class="actual-cond">{{ a.texto }}</p>
+  <p class="actual-cond">{{ a.texto|en }}</p>
   <div class="actual-main">{{ wx(a.icono, a.dia_luz, 'wx wx-xl') }}<span class="actual-temp">{{ a.temperatura }}°</span></div>
-  <p>Sensación de <strong>{{ a.sensacion }}°</strong></p>
+  <p>Feels like <strong>{{ a.sensacion }}°</strong></p>
   <ul class="actual-datos">
-    <li>Humedad <strong>{{ a.humedad }} %</strong></li>
-    <li>Viento {{ flecha(a.giro) }} <strong>{{ a.rumbo }} · {{ a.viento }} km/h</strong></li>
-    <li>Índice UV <strong>{{ a.uv }} {{ a.uv_texto }}</strong> · FPS {{ a.fps }}</li>
-    <li>Lluvia en la última hora <strong>{{ a.lluvia }} mm</strong></li>
+    <li>Humidity <strong>{{ a.humedad }} %</strong></li>
+    <li>Wind {{ flecha(a.giro) }} <strong>{{ a.rumbo|en }} · {{ a.viento }} km/h</strong></li>
+    <li>UV index <strong>{{ a.uv }} {{ a.uv_texto|en }}</strong> · SPF {{ a.fps|en }}</li>
+    <li>Rain in the last hour <strong>{{ a.lluvia }} mm</strong></li>
   </ul>
-  <p class="actual-hora">Última lectura: {{ a.hora }} (hora de la CDMX)</p>
+  <p class="actual-hora">Last reading: {{ a.hora|en }} (Mexico City time)</p>
 </div>{% endif %}
 <aside class="pub-info card">
-  <h2>Pronóstico estadístico del sistema</h2>
-  <p>Se calcula con {{ data.historia.dias }} días de lecturas por hora de la CDMX ({{ data.historia.desde.strftime('%d/%m/%Y') }} a {{ data.historia.hasta.strftime('%d/%m/%Y') }}): lo normal de la temporada más la desviación de los últimos días, que se va apagando. Las horas se reparten con el ciclo típico del día.</p>
-  <p class="muted">No es un modelo físico como los de los servicios meteorológicos. Datos: Open-Meteo.com (CC BY 4.0).</p>
+  <h2>The system's statistical forecast</h2>
+  <p>It is built from {{ data.historia.dias }} days of hourly readings for Mexico City ({{ data.historia.desde|short_date }}, {{ data.historia.desde.year }} to {{ data.historia.hasta|short_date }}, {{ data.historia.hasta.year }}): the seasonal normal plus the deviation of the last few days, which fades out day by day. Each day is spread over the hours with the typical daily cycle.</p>
+  <p class="muted">It is not a physical model like the ones used by weather services. Data: Open-Meteo.com (CC BY 4.0).</p>
 </aside>
 </section>
-<nav class="pub-tabs"><a href="#dias">Clima 1 - 7 días</a><a href="#horas">Por hora</a></nav>
+<nav class="pub-tabs" aria-label="Forecast sections"><a href="#dias">{{ icon('calendar') }} 7-day forecast</a><a href="#horas">{{ icon('clock') }} Hourly</a></nav>
 <section id="dias" class="dias">
 {% for d in data.dias %}<a class="dia{% if d.elegido %} elegido{% endif %}" href="{{ url_for('public_home', dia=d.dia.isoformat()) }}#horas">
-  <strong>{{ d.nombre }}</strong><span class="muted">{{ d.fecha }}</span>{{ wx(d.icono, True) }}
+  <strong>{{ d.dia|day_name(data.hoy) }}</strong><span class="muted">{{ d.dia|short_date }}</span>{{ wx(d.icono, True) }}
   {% if d.prob >= 30 %}<span class="prob">{{ d.prob }} %</span><span class="mm">{{ d.mm }} mm</span>{% else %}<span class="prob vacio">-</span><span class="mm vacio">-</span>{% endif %}
   <span class="temps"><span class="max">{{ d.maxima }}°</span> / <span class="min">{{ d.minima }}°</span></span>
-  <span class="muted">{{ d.texto }} · {{ d.humedad }} %</span></a>{% endfor %}
+  <span class="muted">{{ d.texto|en }} · {{ d.humedad }} %</span></a>{% endfor %}
 </section>
 <section id="horas" class="horas card">
-  <h2>Tiempo en la Ciudad de México, {{ data.titulo_dia }}</h2>
-  <div class="table-wrap"><table><thead><tr><th>Hora</th><th></th><th>Temp.</th><th>Condición</th><th>Prob. de lluvia</th><th>Humedad</th></tr></thead><tbody>
-  {% for h in data.horas %}<tr><td class="hora">{{ h.hora }}</td><td>{{ wx(h.icono, h.dia_luz, 'wx wx-sm') }}</td><td class="t">{{ h.temperatura }}°</td><td>{{ h.texto }}</td><td>{{ h.prob }} %{% if h.mm > 0 %} · {{ h.mm }} mm{% endif %}</td><td>{{ h.humedad }} %</td></tr>
-  {% else %}<tr><td colspan="6" class="empty">Ya no quedan horas de hoy; elige otro día.</td></tr>{% endfor %}</tbody></table></div>
+  <h2>Mexico City weather, {{ data.seleccionado|long_date }}</h2>
+  <div class="table-wrap"><table><thead><tr><th>Hour</th><th></th><th>Temp.</th><th>Condition</th><th>Chance of rain</th><th>Humidity</th></tr></thead><tbody>
+  {% for h in data.horas %}<tr><td class="hora">{{ h.hora }}</td><td>{{ wx(h.icono, h.dia_luz, 'wx wx-sm') }}</td><td class="t">{{ h.temperatura }}°</td><td>{{ h.texto|en }}</td><td>{{ h.prob }} %{% if h.mm > 0 %} · {{ h.mm }} mm{% endif %}</td><td>{{ h.humedad }} %</td></tr>
+  {% else %}<tr><td colspan="6" class="empty">There are no hours left today; pick another day.</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endif %}
-</main><footer>AWS Clima V2 · Datos de Open-Meteo.com (CC BY 4.0) · Pronóstico estadístico del sistema, no oficial</footer></body></html>
+</main><footer class="ad-pie">CDMX Weather · Data: Open-Meteo.com (CC BY 4.0) · Statistical forecast by this system, not official</footer></body></html>

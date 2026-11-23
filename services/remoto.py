@@ -48,13 +48,13 @@ class ApiRemota:
             status, datos = self.transporte("/rpc", cuerpo)
             respuesta = json.loads(datos)
         except (OSError, ValueError):
-            raise DatabaseUnavailable("No se pudo contactar la API de AWS (API Gateway). "
-                                      "Revisa que el laboratorio esté encendido.") from None
+            raise DatabaseUnavailable("Could not reach the AWS API (API Gateway). "
+                                      "Check that the lab is running.") from None
         if not isinstance(respuesta, dict):
-            raise DatabaseUnavailable("Respuesta inválida de la API de AWS.")
+            raise DatabaseUnavailable("Invalid response from the AWS API.")
         if "error" in respuesta:
             error = respuesta["error"] or {}
-            tipo, mensaje = error.get("tipo"), error.get("mensaje") or "Error de la API."
+            tipo, mensaje = error.get("tipo"), error.get("mensaje") or "API error."
             if tipo == "ValueError":
                 raise ValueError(mensaje)
             if tipo == "NoAutorizado":
@@ -65,7 +65,7 @@ class ApiRemota:
                 raise IdempotencyError(int(error.get("status") or 409), error.get("codigo") or "idempotency", mensaje)
             raise DatabaseUnavailable(mensaje)
         if status >= 500:
-            raise DatabaseUnavailable("La API de AWS respondió con error.")
+            raise DatabaseUnavailable("The AWS API answered with an error.")
         return de_json(respuesta.get("ok"))
 
     def salud(self):

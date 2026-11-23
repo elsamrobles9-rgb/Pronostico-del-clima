@@ -1,8 +1,60 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Climate Records</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
-<body><svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true"><symbol id="search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol><symbol id="add" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol><symbol id="edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7l-5-5L4 14z"/></symbol><symbol id="delete" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/></symbol></svg>
-<header><a class="brand" href="{{ url_for('index') if current_user else url_for('public_home') }}">◈ Climate Records · CDMX</a><span class="badge">{{ ('Offline · real data' if datos_reales else 'Local demo') if mode == 'demo' else ('AWS API · option A' if mode == 'api' else 'AWS Lambda mode') }}</span></header>
-{% if current_user %}<nav class="workspace-nav"><a href="{{ url_for('index') }}">Records</a><a href="{{ url_for('import_records') }}">Import records</a><a href="{{ url_for('admin_users') }}">Administrators</a><a href="{{ url_for('admin_audit') }}">Audit log</a><a href="{{ url_for('account_password') }}">My password</a><a href="{{ url_for('public_home') }}">Public weather page</a><span>{{ current_user.display_name or current_user.username }} · {{ current_user.role }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button light">Sign out</button></form></nav>{% endif %}
-<main>{% if mode == 'demo' and datos_reales %}<div class="notice">Offline mode · {{ '{:,}'.format(datos_reales) }} real Open-Meteo readings (CDMX) loaded from this laptop · Changes are kept in memory and reset when the app restarts · No AWS requests</div>{% elif mode == 'demo' %}<div class="notice">Demo mode · Sample data only · Changes reset when the app restarts · No AWS requests</div>{% endif %}
-{% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert {{ category }}" role="alert">{{ message }}</div>{% endfor %}
-{% block content %}{% endblock %}</main><footer>Climate observation workspace</footer></body></html>
+{% from 'icons.html' import icon %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}Administration{% endblock %} · CDMX Weather</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"><script src="{{ url_for('static', filename='admin.js') }}" defer></script></head>
+<body class="admin"><svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+<symbol id="add" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></symbol>
+<symbol id="delete" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+<symbol id="back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+<symbol id="next" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></symbol>
+<symbol id="alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/></symbol>
+<symbol id="error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+<symbol id="users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3.5 3.5 0 010 7M21 20c0-2.6-1.6-4.8-4-5.6"/></symbol>
+<symbol id="history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 108-8 8 8 0 00-6.3 3M4 4v4h4M12 8v4l3 2"/></symbol>
+<symbol id="table" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M10 5v14"/></symbol>
+<symbol id="logout" viewBox="0 0 24 24"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></symbol>
+<symbol id="cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 00.5-8A6 6 0 006 9.5 4.3 4.3 0 007 18z"/></symbol>
+<symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></symbol>
+</svg>
+<header class="ad-header"><div class="ad-header-in">
+<a class="ad-brand" href="{{ url_for('inicio') if current_user else url_for('public_home') }}">◆ CDMX Weather</a>
+<span class="ad-pill">Administration</span>
+{% if mode == 'demo' %}<span class="ad-pill modo">{{ 'Offline · real data' if datos_reales else 'Demo mode' }}</span>{% elif mode == 'api' %}<span class="ad-pill modo">AWS · option A</span>{% else %}<span class="ad-pill modo">AWS · Lambdas</span>{% endif %}
+{% if current_user %}
+<nav class="ad-nav" aria-label="Sections">
+<a href="{{ url_for('inicio') }}" class="{{ 'activo' if seccion == 'inicio' }}">Home</a>
+<a href="{{ url_for('index') }}" class="{{ 'activo' if seccion == 'lecturas' }}">Readings</a>
+<a href="{{ url_for('import_records') }}" class="{{ 'activo' if seccion == 'importar' }}">Import</a>
+<a href="{{ url_for('admin_users') }}" class="{{ 'activo' if seccion == 'usuarios' }}">Administrators</a>
+<a href="{{ url_for('admin_audit') }}" class="{{ 'activo' if seccion == 'auditoria' }}">Audit log</a>
+</nav>
+<div class="ad-usuario">
+<a href="{{ url_for('account_password') }}" class="ad-avatar" title="My password" aria-label="My account: {{ current_user.display_name or current_user.username }}">{{ (current_user.display_name or current_user.username)[:2]|upper }}</a>
+<form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ad-btn chico" type="submit">{{ icon('logout') }} Sign out</button></form>
+</div>
+{% else %}
+<a class="ad-btn chico regresar ad-nav-sin" href="{{ url_for('public_home') }}">{{ icon('back') }} See the weather</a>
+{% endif %}
+</div></header>
+<main class="{% block main_clase %}ad-main{% endblock %}">
+{% block migas %}{% endblock %}
+<div class="ad-alertas">
+{% if mode == 'demo' and datos_reales %}<div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Offline mode</span>{{ '{:,}'.format(datos_reales) }} real Open-Meteo readings loaded from this computer. Changes are kept in memory only and are lost when the portal closes. AWS is not used.</span></div>
+{% elif mode == 'demo' %}<div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Demo mode</span>Sample data. Changes are lost when the portal closes. AWS is not used.</span></div>{% endif %}
+{% for category, message in get_flashed_messages(with_categories=true) %}{% set partes = message.split('||') %}
+<div class="ad-alerta {{ category }}" role="{{ 'alert' if category in ('error', 'warning') else 'status' }}">
+{{ icon({'success': 'check', 'error': 'error', 'warning': 'alert'}.get(category, 'info')) }}
+<span class="cuerpo"><span class="titulo">{{ {'success': 'Done', 'error': 'Could not be completed', 'warning': 'Heads up'}.get(category, 'For your information') }}</span>{{ partes[0] }}{% if partes|length > 1 and partes[1] %}<span class="detalle">Technical detail: {{ partes[1] }}</span>{% endif %}</span>
+<button type="button" class="cerrar" data-cerrar-alerta aria-label="Close this notice">×</button>
+</div>{% endfor %}
+</div>
+{% block content %}{% endblock %}
+</main>
+<footer class="ad-pie">CDMX Weather · Administration · Data: Open-Meteo.com (CC BY 4.0)</footer>
+</body></html>

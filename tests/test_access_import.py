@@ -45,7 +45,7 @@ class AccessImportTests(unittest.TestCase):
         self.assertEqual(self.web.get(r.location).status_code,200)
         for i in range(2):self.web.post(r.location+'/confirm',data={'csrf':self.csrf()})
         self.assertEqual(len(self.backend.table.rows),2)
-        self.assertIn('Imported',self.web.get(r.location).get_data(as_text=True))
+        self.assertIn('Saved',self.web.get(r.location).get_data(as_text=True))
         self.assertEqual(self.app.extensions['analytics'].sincronizadas,[('importacion',1)])   # sp_upsert_lecturas
     def test_other_city_rejected(self):
         self.login();r=self.upload([{**sample(),'location_id':'LOC-GDL','station_id':'ST-GDL-OM'}])
@@ -58,7 +58,7 @@ class AccessImportTests(unittest.TestCase):
     def test_existing_not_overwritten(self):
         self.login();r=self.upload([{**sample(),'uv_index':9}]);self.web.post(r.location+'/confirm',data={'csrf':self.csrf()})
         self.assertEqual(next(iter(self.backend.table.rows.values()))['version'],1)
-        self.assertIn('Not confirmed',self.web.get(r.location).get_data(as_text=True))
+        self.assertIn('Not saved',self.web.get(r.location).get_data(as_text=True))
     def test_owner_and_csrf(self):
         self.login();r=self.upload([sample()]);self.assertEqual(self.web.post(r.location+'/confirm',data={}).status_code,400)
         self.store.add_user('other','correct-password-123','ADMIN');self.login('other')

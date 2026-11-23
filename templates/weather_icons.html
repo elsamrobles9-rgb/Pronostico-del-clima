@@ -1,5 +1,5 @@
 {# Íconos propios del clima (SVG). Sin estilos en línea: los colores están en style.css. #}
-{% macro wx(icono, dia=True, cls='wx') %}<svg class="{{ cls }}" viewBox="0 0 64 64" role="img" aria-label="{{ icono }}">
+{% macro wx(icono, dia=True, cls='wx') %}<svg class="{{ cls }}" viewBox="0 0 64 64" role="img" aria-label="{{ icono|en }}">
 {%- set con_astro = icono in ('despejado', 'nubes-claros', 'lluvia-posible') -%}
 {%- set con_nube = icono in ('nubes-claros', 'nublado', 'lluvia-posible', 'lluvia', 'tormenta', 'nieve') -%}
 {%- if con_astro -%}

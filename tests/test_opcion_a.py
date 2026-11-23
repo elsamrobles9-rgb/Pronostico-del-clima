@@ -90,7 +90,7 @@ class RemoteWebTests(WebTests):
         self.assertTrue(r.headers["Location"].endswith("/records"))
 
     def test_aviso_modo_api(self):
-        self.assertIn("AWS API · option A", self.web.get("/login").get_data(as_text=True))
+        self.assertIn("AWS · option A", self.web.get("/login").get_data(as_text=True))
 
 
 class SeguridadOpcionATests(unittest.TestCase):
@@ -237,7 +237,7 @@ class VercelTests(unittest.TestCase):
                          content_type="application/x-www-form-urlencoded",
                          environ_overrides={"CONTENT_LENGTH": ""})
         self.assertEqual(r.status_code, 302)
-        self.assertTrue(r.headers["Location"].endswith("/records"))
+        self.assertTrue(r.headers["Location"].endswith("/admin"))
 
 
 del ApiTests, WebTests   # que no se ejecuten dos veces desde este archivo

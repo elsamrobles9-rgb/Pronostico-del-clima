@@ -2,6 +2,7 @@ import csv
 import io
 import secrets
 import time
+from services.avisos import avisar_error
 from flask import abort, flash, g, redirect, render_template, request, session, url_for, Response
 from contract import REQUIRED, dumps, load_json, normalize_record
 from services.endpoints import ApiError, sample
@@ -60,7 +61,7 @@ def register_imports(app,store,client,scope,auth=None):
                     db.execute('DELETE FROM imports WHERE created<?',(time.time()-86400,))
                     db.execute('INSERT INTO imports VALUES(?,?,?,?,?,?)',(job,g.user['username'],scope,time.time(),'preview',dumps(rows)))
                 return redirect(url_for('import_preview',job=job))
-            except (ValueError,csv.Error) as exc: flash(str(exc),'error')
+            except (ValueError,csv.Error) as exc: avisar_error(exc)
         return render_template('import.html')
 
     def get_job(job):

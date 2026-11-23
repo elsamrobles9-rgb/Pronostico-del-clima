@@ -15,10 +15,12 @@ import argparse
 import os
 import secrets
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from getpass import getpass
 from pathlib import Path
+from services import avisos, ingles
 from services.access import AccessStore
+from services.avisos import avisar, avisar_error, explicar
 from services.analytics import DemoAnalytics
 from services.api import bp as api_blueprint
 from services.catalog import AUTO_CONDITION, FIXED_LOCATION, FIXED_STATION, check_record, fill_station, resolve_condition
@@ -28,6 +30,7 @@ from services.jwt_tokens import TokenSigner
 from services.mysql_store import DatabaseUnavailable
 from flask import g, Flask, abort, flash, redirect, render_template, request, session, url_for
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from werkzeug.exceptions import HTTPException
 from contract import REQUIRED, normalize_record, normalize_time
 from services.endpoints import DemoClient, LambdaClient, ApiError
 
@@ -45,11 +48,28 @@ FIELDS = [
 KEYS = ("location_id", "timestamp_utc")
 PUBLIC_PAGES = ('public_home', 'login')
 
+ERRORES = {
+    400: ('The request is not valid', 'Something in the form or in the address is not right.',
+          'Reload the page and try again.'),
+    403: ('You do not have permission', 'This section is for administrators only.',
+          'Sign in with an administrator account.'),
+    404: ('We could not find that page', 'The address does not exist or what you were looking for is gone.',
+          'Check the address or go back to the home page.'),
+    405: ('Action not allowed', 'This page does not accept that action.', 'Use the buttons on the page.'),
+    413: ('The file is too large', 'The limit is 256 KB per file.', 'Split the file into smaller parts.'),
+    500: ('Something went wrong', 'An unexpected error happened in the portal.',
+          'Try again in a moment. If it happens again, tell the team.'),
+    503: ('Service unavailable', avisos.SIN_CONEXION, 'Start the lab and the 2 RDS databases, wait until they say '
+          'Available and try again.'),
+}
+
 
 def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempotency=None, analytics=None,
                secret_key=None):
     app = Flask(__name__)
     app.secret_key = secret_key or secrets.token_hex(32)
+    avisos.registrar(app)
+    ingles.registrar(app)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", MAX_CONTENT_LENGTH=300000,
                       CLIMATE_MODE=mode)
     client = client if client is not None else DemoClient()
@@ -83,12 +103,18 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
         except Exception as exc:
             app.logger.warning('sp_upsert_lecturas failed: %s', exc)
             if not quiet:
-                flash('Saved in DynamoDB. PostgreSQL could not be updated right now; the next ETL run will copy it.', 'error')
+                avisar('warning', 'The reading was saved in DynamoDB, but PostgreSQL could not be updated right now. '
+                       'The forecast will include it after the next load (step 5).', str(exc)[:200])
             return {'status': 'pending', 'message': 'The next ETL run will copy it.'}
         if result and not quiet:
-            flash(f"PostgreSQL updated by sp_upsert_lecturas: {result['insertados']} inserted, "
-                  f"{result['actualizados']} updated, {result['omitidos']} unchanged, "
-                  f"{result['rechazados']} rejected.", 'success')
+            texto = (f"PostgreSQL updated by sp_upsert_lecturas: {result['insertados']} new, "
+                     f"{result['actualizados']} updated, {result['omitidos']} unchanged, "
+                     f"{result['rechazados']} rejected.")
+            if result['rechazados']:
+                avisar('warning', texto + ' Rejected readings stay in the PostgreSQL anomaly queue '
+                       '(stg_observations); the forecast does not use them.')
+            else:
+                avisar('info', texto)
         return result or {'status': 'demo'}
 
     app.extensions.update(audit=audit, analytics_sync=sync_analytics)
@@ -98,11 +124,37 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
         if "csrf" not in session: session["csrf"] = secrets.token_urlsafe(32)
         reales = len(analytics.horas) if getattr(analytics, "datos_reales", False) else 0
         return dict(csrf=session["csrf"], mode=mode, fields=FIELDS, current_user=g.get("user"),
-                    users_store=store.kind, datos_reales=reales)
+                    users_store=store.kind, datos_reales=reales, etiquetas=avisos.ETIQUETAS, rumbos=avisos.RUMBOS)
+
+    def pagina_error(codigo, detalle=None):
+        titulo, mensaje, que_hacer = ERRORES.get(codigo, ERRORES[500])
+        if 'user' not in g:                   # rutas que no existen no pasan por authorize()
+            try: g.user = store.user(session.get('sid', '')) if session.get('sid') else None
+            except Exception: g.user = None
+        if detalle:
+            claro, tecnico = explicar(detalle)
+            if tecnico:                       # se reconoció: el mensaje claro va arriba
+                mensaje, detalle = claro, tecnico
+        return render_template('error.html', title=titulo, message=mensaje, que_hacer=que_hacer,
+                               detalle=detalle, codigo=codigo), codigo
 
     @app.errorhandler(DatabaseUnavailable)
     def database_down(exc):
-        return render_template('error.html', title='Database unavailable', message=str(exc)), 503
+        return pagina_error(503, str(exc))
+
+    @app.errorhandler(HTTPException)
+    def error_http(exc):
+        if exc.code is None or exc.code < 400 or request.path.startswith('/api/') or request.blueprint == 'api':
+            return exc
+        descripcion = exc.description if exc.description and not str(exc.description).startswith(
+            ('The ', 'You ', 'Method ', 'The requested', 'Bad Request')) else None
+        return pagina_error(exc.code if exc.code in ERRORES else 500, descripcion)
+
+    @app.errorhandler(500)
+    def error_interno(exc):
+        if request.path.startswith('/api/'):
+            return {'error': 'Internal server error'}, 500
+        return pagina_error(500)
 
     @app.before_request
     def authorize():
@@ -118,7 +170,11 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             else: raise
         if request.endpoint in PUBLIC_PAGES: return
         if not g.user:
-            session.pop('sid', None)       # se quita la sesión vencida; el token del formulario se conserva
+            if session.pop('sid', None):     # se quita la sesión vencida; el token del formulario se conserva
+                avisar('warning', 'Your session ended: 30 minutes passed without use, it was closed somewhere else '
+                       'or the password changed. Please sign in again.')
+            if request.method == 'GET':
+                session['despues'] = request.full_path.rstrip('?')
             return redirect(url_for('login'))
         if g.user['role'] != 'ADMIN': abort(403)
 
@@ -138,28 +194,37 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             problem = None
         except Exception as exc:
             app.logger.warning('Forecast unavailable: %s', exc)
-            data, problem = None, 'El pronóstico no está disponible en este momento. Intenta más tarde.'
+            data, problem = None, 'The forecast is not available right now. Please try again later.'
         return render_template('public.html', data=data, problem=problem)
 
     # ------------------------------------------------------------------ session
     @app.route('/login', methods=['GET', 'POST'])
     def login():
         if request.method == 'POST':
-            token = store.login(request.form.get('username', ''), request.form.get('password', ''))
+            try:
+                token = store.login(request.form.get('username', ''), request.form.get('password', ''))
+            except DatabaseUnavailable as exc:
+                avisar('error', 'Your account could not be checked because the user database is not responding. '
+                       + avisos.SIN_CONEXION, str(exc))
+                return render_template('login.html'), 503
             if token:
+                destino = session.get('despues', '')
                 store.logout(session.get('sid', ''))
                 session.clear()
                 session['sid'] = token
                 session['csrf'] = secrets.token_urlsafe(32)
-                return redirect(url_for('index'))
-            flash('Sign-in failed. Check your details or try again in 15 minutes.', 'error')
+                seguro = destino.startswith('/') and not destino.startswith('//') and not destino.startswith('/login')
+                return redirect(destino if seguro else url_for('inicio'))
+            avisar('error', 'We could not sign you in. Check your email and password. After 5 failed attempts in a '
+                   'row the account is locked for 15 minutes.')
         return render_template('login.html')
 
     @app.post('/logout')
     def logout():
         store.logout(session.get('sid', ''))
         session.clear()
-        return redirect(url_for('public_home'))
+        avisar('success', 'You signed out.')
+        return redirect(url_for('login'))
 
     @app.before_request
     def protect_form():
@@ -220,13 +285,36 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
         try: return client.get(keys)
         except ApiError: return None
 
+    @app.get("/admin")
+    def inicio():
+        try: pagina = analytics.pagina()
+        except Exception as exc:
+            app.logger.warning('Estado del pronóstico no disponible: %s', exc)
+            pagina = None
+        try: admins = sum(1 for u in store.list_users() if u['active'])
+        except Exception: admins = None
+        try: eventos = store.audit_log(5)
+        except Exception: eventos = []
+        return render_template("inicio.html", pagina=pagina, admins=admins, eventos=eventos)
+
     @app.get("/records")
     def index():
         q = request.args.get("q", "").strip()
         rows, cursor = [], ""
         try: rows, cursor = client.list_records(q, request.args.get("cursor", ""))
-        except ApiError as exc: flash(str(exc), "error")
+        except ApiError as exc: avisar_error(exc)
         return render_template("index.html", rows=rows, q=q, cursor=cursor)
+
+    @app.get("/records/ir")
+    def ir_a_hora():
+        """Abre la lectura de un día y hora de la CDMX (se convierte a UTC)."""
+        try:
+            local = datetime.strptime(f"{request.args.get('dia', '')} {request.args.get('hora', '')}", "%Y-%m-%d %H")
+        except ValueError:
+            avisar('error', 'Choose a valid day and hour.')
+            return redirect(url_for('index'))
+        utc = (local + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:00Z")
+        return redirect(url_for('edit', location_id=FIXED_LOCATION, timestamp_utc=utc))
 
     def form_page(data, editing, token):
         return render_template("form.html", data=data, editing=editing, snapshot=token, catalog=catalog(),
@@ -244,13 +332,13 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                 result = client.create(record)
                 audit("READING_CREATE", "READING", record["location_id"] + "|" + record["timestamp_utc"], "SUCCESS",
                       after=result.get("record"))
-                flash("Record added successfully.", "success")
+                avisar("success", "Reading saved in DynamoDB (version 1).")
                 if result.get("record"): sync_analytics([result["record"]], "alta")
                 return redirect(url_for("index"))
             except (ApiError, ValueError) as exc:
                 if record: audit("READING_CREATE", "READING", record["location_id"] + "|" + record["timestamp_utc"],
                                  "REJECTED", after=record, reason=str(exc))
-                flash(str(exc), "error")
+                avisar_error(exc)
         return form_page(data, False, "")
 
     @app.route("/edit", methods=["GET", "POST"])
@@ -272,17 +360,21 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                     audit("READING_UPDATE", "READING", entity, "REJECTED", before=before, after=parsed, reason=str(exc))
                     raise
                 audit("READING_UPDATE", "READING", entity, "SUCCESS", before=before, after=result.get("record"))
-                flash("Record updated successfully.", "success")
+                avisar("success", f"Changes saved. The reading is now at version {(result.get('record') or {}).get('version', version + 1)}.")
                 if result.get("record"): sync_analytics([result["record"]], "edicion")
                 return redirect(url_for("index"))
-            except (ApiError, ValueError) as exc: flash(str(exc), "error")
+            except (ApiError, ValueError) as exc: avisar_error(exc)
         else:
             try:
                 data = client.get(keys)
                 context()
                 token = snapshot(data, "edit")
             except ApiError as exc:
-                flash(str(exc), "error")
+                if getattr(exc, "status", None) == 404:
+                    avisar("warning", f"There is no reading saved for {avisos.hora_local(keys['timestamp_utc'])} "
+                           "(Mexico City time). You can enter it with “New reading”.")
+                else:
+                    avisar_error(exc)
                 return redirect(url_for("index"))
         return form_page(data, True, token)
 
@@ -300,16 +392,17 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                     audit("READING_DELETE", "READING", entity, "REJECTED", reason=str(exc))
                     raise
                 audit("READING_DELETE", "READING", entity, "SUCCESS", before=result.get("record"))
-                flash("Record deleted successfully. PostgreSQL marks it as deleted on the next full ETL run.", "success")
+                avisar("success", "Reading deleted from DynamoDB. PostgreSQL will mark it as deleted on the next "
+                       "full load (step 5); until then the forecast keeps using it.")
                 return redirect(url_for("index"))
-            except (ApiError, ValueError) as exc: flash(str(exc), "error")
+            except (ApiError, ValueError) as exc: avisar_error(exc)
         else:
             try:
                 record = client.get(keys)
                 context()
                 token = snapshot(record, "delete")
             except ApiError as exc:
-                flash(str(exc), "error")
+                avisar_error(exc)
                 return redirect(url_for("index"))
         return render_template("delete.html", keys=keys, snapshot=token)
 
@@ -322,11 +415,15 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                     raise ValueError('Passwords do not match.')
                 action = store.save_admin(request.form.get('username', '').strip(), request.form.get('display_name', ''),
                                           request.form.get('password', ''), actor=g.user)
-                flash('Administrator created. Share the password through a private channel.' if action == 'CREADO'
-                      else 'Password changed. Every session of that administrator was closed immediately.', 'success')
+                avisar('success', 'Administrator created. Share the password through a private channel.' if action == 'CREADO'
+                       else 'Password changed. All of that administrator\'s sessions were closed right away.')
                 return redirect(url_for('admin_users'))
-            except ValueError as exc: flash(str(exc), 'error')
-        return render_template('admin_users.html', users=store.list_users())
+            except ValueError as exc: avisar_error(exc)
+        try: usuarios = store.list_users()
+        except DatabaseUnavailable as exc:
+            avisar_error(exc)
+            usuarios = []
+        return render_template('admin_users.html', users=usuarios)
 
     @app.post('/admin/users/status')
     def admin_user_status():
@@ -336,9 +433,9 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             if action == 'disable': store.disable(username, actor=g.user)
             elif action == 'enable': store.enable(username, actor=g.user)
             else: raise ValueError('Unknown action.')
-            flash('Administrator disabled: every active session was revoked immediately.' if action == 'disable'
-                  else 'Administrator enabled. They must sign in again.', 'success')
-        except ValueError as exc: flash(str(exc), 'error')
+            avisar('success', 'Administrator disabled: all of their sessions were closed right away.' if action == 'disable'
+                   else 'Administrator enabled. They will need to sign in again.')
+        except ValueError as exc: avisar_error(exc)
         return redirect(url_for('admin_users'))
 
     @app.route('/account/password', methods=['GET', 'POST'])
@@ -350,22 +447,26 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                 store.change_own_password(g.user, request.form.get('current', ''), request.form.get('password', ''))
                 store.logout(session.get('sid', ''))
                 session.clear()
-                flash('Password changed. Sign in again with the new password.', 'success')
+                avisar('success', 'Password changed. Sign in again with the new password.')
                 return redirect(url_for('login'))
-            except ValueError as exc: flash(str(exc), 'error')
+            except ValueError as exc: avisar_error(exc)
         return render_template('account_password.html')
 
     @app.get('/admin/audit')
     def admin_audit():
-        return render_template('admin_audit.html', events=store.audit_log(150), history=store.history_count())
+        try: eventos = store.audit_log(150)
+        except DatabaseUnavailable as exc:
+            avisar_error(exc)
+            eventos = []
+        return render_template('admin_audit.html', events=eventos, history=store.history_count())
 
     @app.post('/admin/audit/rotate')
     def admin_audit_rotate():
         try:
             moved, sessions = store.rotate_audit(int(request.form.get('days', '30')), actor=g.user)
-            flash(f'sp_rotar_auditoria: {moved} events moved to the history table and {sessions} expired '
-                  f'sessions removed.', 'success')
-        except ValueError as exc: flash(str(exc) if 'invalid literal' not in str(exc) else 'Days must be a number.', 'error')
+            avisar('success', f'Audit log archived by sp_rotar_auditoria: {moved} events moved to the history table and '
+                   f'{sessions} expired sessions were cleaned up.')
+        except ValueError as exc: avisar_error(exc)
         return redirect(url_for('admin_audit'))
 
     return app
@@ -444,8 +545,8 @@ def crear_app_desde_entorno():
         @fallo.route("/", defaults={"ruta": ""})
         @fallo.route("/<path:ruta>")
         def sin_configurar(ruta):
-            return ("Falta configurar CLIMA_API_URL y CLIMA_SECRET_KEY (32+ caracteres) en "
-                    "Vercel → Settings → Environment Variables, y luego Redeploy."), 503
+            return ("CLIMA_API_URL and CLIMA_SECRET_KEY (32+ characters) are not set. Add them in "
+                    "Vercel → Settings → Environment Variables, then Redeploy."), 503
         return fallo
     partes, _ = remote_backend(url)
     web = create_app(mode="api", auth_path="/tmp/portal.sqlite3", secret_key=secreto, **partes)

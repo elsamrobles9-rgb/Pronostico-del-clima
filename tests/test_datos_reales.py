@@ -104,9 +104,9 @@ class DatosRealesTests(unittest.TestCase):
         app.testing = True
         web = app.test_client()
         publica = web.get("/").get_data(as_text=True)
-        self.assertIn("Modo sin conexión", publica)
-        self.assertIn(f"{len(lecturas):,} lecturas reales", publica)
-        self.assertNotIn("datos sintéticos", publica)
+        self.assertIn("Offline mode", publica)
+        self.assertIn(f"{len(lecturas):,} real Open-Meteo readings", publica)
+        self.assertNotIn("Synthetic sample data", publica)
         login = web.get("/login").get_data(as_text=True)
         self.assertIn("Offline · real data", login)
 

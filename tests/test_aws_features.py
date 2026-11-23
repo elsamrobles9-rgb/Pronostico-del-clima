@@ -175,7 +175,7 @@ class JwtTests(unittest.TestCase):
         head, body, sig = token.split(".")
         forged = b64encode(compact({**signer.verify(token), "role": "ADMIN"}))
         for bad in (head + "." + forged + "." + sig, b64encode(compact({"alg": "none", "typ": "JWT"})) + "." + body + ".",
-                    token[:-2] + "AA", "not.a.token", ""):
+                    token[:-4] + ("AAAA" if token[-4:-1] != "AAA" else "BBBB"), "not.a.token", ""):
             with self.assertRaises(TokenError): signer.verify(bad)
         with self.assertRaises(TokenError): TokenSigner(b"x" * 32).verify(token)
         expired = TokenSigner(b"k" * 32, ttl=-1).issue({"sub": "u1"})
@@ -397,8 +397,8 @@ class WebTests(unittest.TestCase):
 
     def test_public_page_without_sign_in(self):
         html = self.web.get("/").get_data(as_text=True)
-        for text in ("Clima 1 - 7 días", "Por hora", "Hoy", "Mañana", "Sensación de", "Pronóstico estadístico",
-                     "Acceso administrador"):
+        for text in ("7-day forecast", "Hourly", "Today", "Tomorrow", "Feels like", "statistical forecast",
+                     "Admin sign-in"):
             self.assertIn(text, html)
         self.assertEqual(len(re.findall(r'class="dia( elegido)?"', html)), 7)
         self.assertEqual(self.web.get("/?dia=2026-11-23").status_code, 200)
@@ -411,7 +411,7 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("Locations", html)
         form = {**reading(precipitation_mm="2"), "csrf": self.csrf()}
         response = self.web.post("/add", data=form, follow_redirects=True)
-        self.assertIn("sp_upsert_lecturas: 1 inserted", response.get_data(as_text=True))
+        self.assertIn("sp_upsert_lecturas: 1 new", response.get_data(as_text=True))
         saved = next(iter(self.backend.table.rows.values()))
         self.assertEqual((saved["station_id"], saved["condition_id"]), ("ST-CDMX-OM", "COND-RAIN"))
         html = self.web.post("/add", data={**form, "location_id": "LOC-GDL"}).get_data(as_text=True)
@@ -433,7 +433,7 @@ class WebTests(unittest.TestCase):
         self.assertIn("Password changed", response.get_data(as_text=True))
         response = self.web.post("/admin/audit/rotate", data={"csrf": self.csrf(), "days": "0"}, follow_redirects=True)
         self.assertIn("sp_rotar_auditoria", response.get_data(as_text=True))
-        self.assertIn("AUDIT_ROTATE", self.web.get("/admin/audit").get_data(as_text=True))
+        self.assertIn("Audit log archived", self.web.get("/admin/audit").get_data(as_text=True))
         response = self.web.post("/account/password", data={"csrf": self.csrf(), "current": PASSWORD,
                                                             "password": "brand-new-pass-1", "confirm": "brand-new-pass-1"})
         self.assertEqual(response.headers["Location"], "/login")

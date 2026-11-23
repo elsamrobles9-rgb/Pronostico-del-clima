@@ -1,1 +1,12 @@
-{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block content %}<section class="card confirmation"><div class="delete-symbol">{{ icon('delete') }}</div><h1>Delete this record?</h1><p>This action cannot be undone.</p><dl><dt>Location ID</dt><dd>{{ keys.location_id }}</dd><dt>Timestamp</dt><dd>{{ keys.timestamp_utc }}</dd></dl><form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="snapshot" value="{{ snapshot }}"><div class="form-actions"><a class="button light" href="{{ url_for('index') }}">Cancel</a><button class="button destructive" type="submit">Delete record</button></div></form></section>{% endblock %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = 'lecturas' %}
+{% block titulo %}Delete reading{% endblock %}
+{% block migas %}{{ migas([('Home', url_for('inicio')), ('Readings', url_for('index')), ('Delete', None)], ('Back to readings', url_for('index'))) }}{% endblock %}
+{% block content %}
+<section class="ad-tarjeta ad-confirmar">
+<h1>Delete this reading?</h1>
+<div class="ad-alertas ad-mt"><div class="ad-alerta warning" role="alert">{{ icon('alert') }}<span class="cuerpo"><span class="titulo">This cannot be undone</span>It is deleted from DynamoDB right now and recorded in the audit log. PostgreSQL marks it as deleted on the next full load (step 5), so the forecast keeps using it until then.</span></div></div>
+<dl><dt>Date and time (Mexico City)</dt><dd>{{ keys.timestamp_utc|hora_local }}</dd><dt>In UTC</dt><dd>{{ keys.timestamp_utc }}</dd><dt>Location</dt><dd>{{ keys.location_id }}</dd></dl>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="snapshot" value="{{ snapshot }}">
+<div class="ad-barra"><a class="ad-btn" href="{{ url_for('index') }}">{{ icon('back') }} No, go back</a><button class="ad-btn peligro" type="submit">{{ icon('delete') }} Yes, delete reading</button></div></form>
+</section>
+{% endblock %}

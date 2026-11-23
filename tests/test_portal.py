@@ -36,7 +36,7 @@ class PortalTests(unittest.TestCase):
 
     def test_list_and_english_fields(self):
         html = self.web.get("/records").get_data(as_text=True)
-        for text in ("Add record", "UV index", "Dew point", "LOC-CDMX", "Edit record", "Delete record"):
+        for text in ("New reading", "Temperature", "Humidity", "LOC-CDMX", "Edit", "Delete"):
             self.assertIn(text, html)
         self.assertNotIn("id_ubicacion", html)
 

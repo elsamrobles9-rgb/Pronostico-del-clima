@@ -195,7 +195,7 @@ def pronostico():
         return problem(503, "forecast_unavailable", "The forecast is not available right now.")
     import json
     datos = json.loads(json.dumps(datos, default=str))   # fechas -> texto ISO
-    return reply(200, {**datos, "ubicacion": "LOC-CDMX", "aviso": "Pronóstico estadístico del sistema"})
+    return reply(200, {**datos, "ubicacion": "LOC-CDMX", "aviso": "Statistical forecast by this system"})
 
 
 @bp.post("/auth/login")
