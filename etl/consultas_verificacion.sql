@@ -2,11 +2,12 @@
 -- En DBeaver: coloca el cursor dentro de una consulta y presiona Ctrl+Enter.
 -- Todas son de solo lectura.
 
--- 1. ¿Cuántas filas hay en cada tabla? (después de la carga: 5 series, 10,000 observaciones)
+-- 1. ¿Cuántas filas hay en cada tabla? (solo CDMX: 1 serie, unas 10,000 observaciones)
 SELECT 'series' AS tabla, count(*) AS filas FROM climate_analytics.series
 UNION ALL SELECT 'observations (activas)', count(*) FROM climate_analytics.observations WHERE deleted_at_utc IS NULL
 UNION ALL SELECT 'observations (borradas)', count(*) FROM climate_analytics.observations WHERE deleted_at_utc IS NOT NULL
-UNION ALL SELECT 'climate_aggregates', count(*) FROM climate_analytics.climate_aggregates
+UNION ALL SELECT 'climate_aggregates (DAY)', count(*) FROM climate_analytics.climate_aggregates WHERE granularity = 'DAY'
+UNION ALL SELECT 'climate_aggregates (HOUR)', count(*) FROM climate_analytics.climate_aggregates WHERE granularity = 'HOUR'
 UNION ALL SELECT 'etl_batches', count(*) FROM climate_analytics.etl_batches;
 
 -- 2. Historial de lotes del ETL: qué se cargó, cuándo y con qué resultado
@@ -55,7 +56,8 @@ JOIN climate_analytics.series s ON s.series_id = a.series_id
 WHERE a.granularity = 'DAY' AND a.coverage_pct = 100
 ORDER BY dia_local, s.location_id;
 
--- 7. Los 10 stored procedures instalados (y las 2 funciones auxiliares que usan)
+-- 7. Los 13 stored procedures de PostgreSQL (y las 2 funciones auxiliares que usan).
+--    Los otros 2 (sp_guardar_admin y sp_rotar_auditoria) están en MySQL: 15 en total.
 SELECT routine_type AS tipo, routine_name AS nombre
 FROM information_schema.routines
 WHERE routine_schema = 'climate_analytics'
@@ -84,3 +86,16 @@ SELECT round(100.0 * avg(CASE WHEN o.condition_id = climate_analytics.fn_clasifi
        THEN 1 ELSE 0 END), 1) AS coincidencia_pct, count(*) AS registros
 FROM climate_analytics.observations o
 WHERE o.deleted_at_utc IS NULL;
+
+-- 11. Agregados por hora (SP 14): las últimas 24 horas con dato, en hora local
+SELECT (a.starts_at_utc AT TIME ZONE s.timezone_name) AS hora_local, a.temperature_mean_c AS temp_c,
+       a.humidity_mean_pct AS humedad, a.precipitation_total_mm AS lluvia_mm, a.version
+FROM climate_analytics.climate_aggregates a
+JOIN climate_analytics.series s ON s.series_id = a.series_id
+WHERE a.granularity = 'HOUR'
+ORDER BY a.starts_at_utc DESC
+LIMIT 24;
+
+-- 12. Promedio móvil de 7 días (SP 15): estimación para un día con los 7 días anteriores.
+--     Cambia la fecha por la que quieras revisar.
+CALL climate_analytics.sp_promedio_movil('LOC-CDMX', DATE '2026-11-18', 7, NULL, NULL, NULL, NULL, NULL, NULL);

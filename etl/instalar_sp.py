@@ -1,6 +1,6 @@
 """Instala (o reinstala) los stored procedures en las dos RDS con un solo comando.
 
-  PostgreSQL climate_analytics:  etl/sql/procedimientos_postgres.sql   (SP 1 a 11)
+  PostgreSQL climate_analytics:  etl/sql/procedimientos_postgres.sql   (SP 1 a 11, 14 y 15)
   MySQL climate_transactional:   sql/mysql_procedimientos.sql          (SP 12 y 13 + audit_events_history)
 
 Es seguro repetirlo: usa CREATE OR REPLACE, IF NOT EXISTS y DROP PROCEDURE IF EXISTS.
@@ -123,8 +123,9 @@ def instalar_postgres():
     procedimientos = [nombre for tipo, nombre in filas if tipo == "PROCEDURE"]
     print(f"Instalado. {len(procedimientos)} procedimientos y {len(filas) - len(procedimientos)} funciones:")
     print("  " + ", ".join(procedimientos))
-    if "sp_upsert_lecturas" not in procedimientos:
-        print("AVISO: falta sp_upsert_lecturas.")
+    for nombre in ("sp_upsert_lecturas", "sp_calcular_agregados_horarios", "sp_promedio_movil"):
+        if nombre not in procedimientos:
+            print(f"AVISO: falta {nombre}.")
 
 
 def instalar_mysql():
@@ -161,7 +162,7 @@ def main():
         instalar_postgres()
     if not args.solo_postgres:
         instalar_mysql()
-    print("\nListo. Total esperado: 11 SP en PostgreSQL + 2 SP en MySQL = 13.")
+    print("\nListo. Total esperado: 13 SP en PostgreSQL + 2 SP en MySQL = 15.")
 
 
 if __name__ == "__main__":

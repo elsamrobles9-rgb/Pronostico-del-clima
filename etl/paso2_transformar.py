@@ -3,7 +3,7 @@
 Qué hace:
   1. Convierte cada hora de Open-Meteo al formato del contrato V2.
   2. La valida con el MISMO contract.py que usan el portal y las Lambdas.
-  3. Toma las primeras 2,000 horas válidas de cada ubicación (10,000 en total).
+  3. Toma las 10,000 horas válidas más recientes de CDMX (la única ubicación).
   4. Guarda las filas rechazadas con su motivo.
   5. Genera el SQL de catálogos para MySQL (paso 3) y catalogo.json.
 

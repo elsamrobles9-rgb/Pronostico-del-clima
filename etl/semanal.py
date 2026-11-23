@@ -4,7 +4,7 @@ Qué hace, en orden:
   1. Descarga de Open-Meteo la última semana completa (7 días hasta ayer) de la CDMX.
   2. Transforma y valida con contract.py (las mismas reglas que las Lambdas).
   3. Carga en DynamoDB ClimateReadingsV2 (los duplicados se rechazan, no se repiten).
-  4. ETL incremental a PostgreSQL con los 10 stored procedures (solo los cambios nuevos).
+  4. ETL incremental a PostgreSQL con los stored procedures (solo los cambios nuevos).
   5. Reentrena y evalúa la predicción (MAE y RMSE) con toda la historia, incluida la semana nueva.
 
 Los archivos de cada semana van a etl/datos_semanal/AAAA-MM-DD/; los 10,000 registros
@@ -73,7 +73,7 @@ def main():
     paso(1, "Descargar la semana de Open-Meteo", "paso1_descargar.py", entorno=entorno)
     paso(2, "Transformar y validar", "paso2_transformar.py", entorno=entorno)
     paso(3, "Cargar en DynamoDB (ClimateReadingsV2)", "paso4_cargar_dynamodb.py", *si, entorno=entorno)
-    paso(4, "ETL incremental a PostgreSQL (10 stored procedures)", "paso5_etl_postgres.py", *si, entorno=entorno)
+    paso(4, "ETL incremental a PostgreSQL (stored procedures)", "paso5_etl_postgres.py", *si, entorno=entorno)
     if not args.sin_prediccion:
         paso(5, "Reentrenar y evaluar la predicción (MAE / RMSE)", "paso6_predecir.py", *si, entorno=entorno)
     print("\nListo. Revisa en DBeaver: etl_batches (lote nuevo), forecast_runs (corrida nueva) y model_metrics.")
