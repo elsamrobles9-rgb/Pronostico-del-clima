@@ -122,9 +122,10 @@ class RemoteStore:
         return self.api.llamar("catalog", fresh=fresh)
 
     # administración: el actor lo decide ClimateDbV2 a partir del token, no lo que se mande aquí
-    def save_admin(self, email, display_name, password, actor=None, request_id=None):
+    def save_admin(self, email, display_name, password, actor=None, request_id=None, mode=None):
+        extra = {"mode": mode} if mode else {}    # sin mode, el mensaje es igual al de antes (compatibilidad)
         return self.api.llamar("save_admin", token_actual(), email=email, display_name=display_name,
-                               password=password, request_id=request_id)
+                               password=password, request_id=request_id, **extra)
 
     def change_own_password(self, user, current, new):
         return self.api.llamar("change_own_password", token_actual(), current=current, new=new)
@@ -141,6 +142,15 @@ class RemoteStore:
     def count_admins(self):
         return self.api.llamar("count_admins", token_actual())
 
+    def profile(self, user):
+        return self.api.llamar("my_profile", token_actual())
+
+    def update_own_profile(self, user, display_name):
+        return self.api.llamar("update_own_profile", token_actual(), display_name=display_name)
+
+    def set_role(self, email, role, actor=None):
+        raise ValueError("Roles only change from the command line (manage_users.py), never through the API.")
+
     def audit(self, actor, action, entity_type, entity_key, outcome, before=None, after=None, reason=None,
               request_id=None):
         token = token_actual()
@@ -149,7 +159,8 @@ class RemoteStore:
         return self.api.llamar("audit", token, action=action, entity_type=entity_type, entity_key=entity_key,
                                outcome=outcome, before=before, after=after, reason=reason, request_id=request_id)
 
-    def audit_log(self, limit=100):
+    def audit_log(self, limit=100, actor=None):
+        # Quién ve qué lo decide ClimateDbV2 con el token: el ADMIN solo recibe sus propios eventos.
         return self.api.llamar("audit_log", token_actual(), limit=limit)
 
     def rotate_audit(self, days, actor=None, request_id=None):
@@ -171,6 +182,9 @@ class RemoteAnalytics:
 
     def pagina(self, dia_elegido=None, ahora_local=None):
         return self.api.llamar("pagina", dia=dia_elegido)
+
+    def lecturas_dia(self, dia=None):
+        return self.api.llamar("lecturas_dia", dia=dia)
 
     def upsert(self, records, origen, fuentes, condiciones):
         return self.api.llamar("upsert", token_actual(), records=list(records), origen=origen,

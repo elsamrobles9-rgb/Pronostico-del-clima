@@ -1,0 +1,15 @@
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = '' %}
+{% block titulo %}My profile{% endblock %}
+{% block migas %}{{ migas([('Home', url_for('inicio')), ('My profile', None)], ('Back to home', url_for('inicio'))) }}{% endblock %}
+{% block content %}
+<h1>My profile</h1>
+<p class="ad-sub">Only you can see this page. You can change your display name and your password, never your role.</p>
+<section class="ad-tarjeta"><h2>Account</h2>
+<dl><dt>{{ 'Email' if users_store.startswith('mysql') else 'Username' }}</dt><dd>{{ perfil.username }}</dd>
+<dt>Role</dt><dd><span class="ad-etiqueta">{{ rol_texto or perfil.role }}</span></dd>
+{% if perfil.created_at_utc %}<dt>Account created</dt><dd>{{ perfil.created_at_utc|hora_local }} (Mexico City time)</dd>{% endif %}</dl>
+</section>
+<form method="post" class="ad-tarjeta ad-mt"><h2>Display name</h2><input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="ad-campos"><label class="campo">Display name<input name="display_name" maxlength="120" value="{{ perfil.display_name or '' }}" required><span class="ayuda">1 to 120 characters. It is shown in the panel.</span></label></div>
+<div class="ad-barra ad-mt"><a class="ad-btn" href="{{ url_for('account_password') }}">{{ icon('key') }} Change my password</a><button class="ad-btn primario" type="submit">{{ icon('check') }} Save name</button></div></form>
+{% endblock %}

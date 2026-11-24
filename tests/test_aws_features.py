@@ -21,7 +21,8 @@ from services.mysql_store import MySQLAccessStore, utcnow
 sqlite3.register_adapter(datetime, lambda d: d.strftime("%Y-%m-%d %H:%M:%S.%f"))
 SCHEMA = """
 CREATE TABLE roles (role_id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL, name TEXT NOT NULL);
-INSERT INTO roles VALUES (1,'ADMIN','Administrador'),(2,'DATA_ENTRY','Captura'),(3,'ANALYST','Analista');
+INSERT INTO roles VALUES (1,'ADMIN','Administrador'),(2,'DATA_ENTRY','Captura'),(3,'ANALYST','Analista'),
+  (4,'SUPERADMIN','Superadministrador');
 CREATE TABLE users (user_id TEXT PRIMARY KEY, role_id INTEGER NOT NULL REFERENCES roles(role_id),
   normalized_email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1, auth_version INTEGER NOT NULL DEFAULT 1 CHECK (auth_version > 0),
@@ -101,14 +102,23 @@ class StoreDouble(MySQLAccessStore):
             cur.execute("SELECT u.user_id, r.code FROM users u JOIN roles r ON r.role_id = u.role_id"
                         " WHERE u.normalized_email = %s", (email,))
             fila = cur.fetchone()
+            if actor is not None:          # desde el panel o la API: solo el SUPERADMIN gestiona otras cuentas
+                cur.execute("SELECT r.code FROM users u JOIN roles r ON r.role_id = u.role_id"
+                            " WHERE u.user_id = %s AND u.is_active = 1", (actor,))
+                quien = cur.fetchone()
+                propio = fila is not None and fila["user_id"] == actor
+                if not propio and (not quien or quien["code"] != "SUPERADMIN"):
+                    raise ValueError("Solo el superadministrador puede crear cuentas o cambiar contraseñas de otros")
             revocadas = 0
             if not fila:
                 cur.execute("INSERT INTO users VALUES (%s, 1, %s, %s, %s, 1, 1, %s)",
                             (nuevo, email, hashed, nombre or email.split("@")[0], now))
                 usuario, accion = nuevo, "CREADO"
             else:
-                if fila["code"] != "ADMIN":
+                if fila["code"] not in ("ADMIN", "SUPERADMIN"):
                     raise ValueError("Ese correo pertenece a un usuario que no es administrador")
+                if fila["code"] == "SUPERADMIN" and actor is not None and fila["user_id"] != actor:
+                    raise ValueError("Solo el propio superadministrador puede cambiar su contraseña")
                 usuario, accion = fila["user_id"], "CONTRASENA"
                 cur.execute("UPDATE users SET password_hash = %s, display_name = COALESCE(%s, display_name),"
                             " auth_version = auth_version + 1 WHERE user_id = %s", (hashed, nombre, usuario))
@@ -148,6 +158,13 @@ def mysql_double(path, test=None):
     if test is not None:
         test.addCleanup(store.db.close)   # runs before the temporary folder is removed
     return store
+
+
+def crear_super(store, email="super@example.com"):
+    """Cuenta SUPERADMIN de prueba: se crea como ADMIN y se promueve como lo hace la migración."""
+    store.save_admin(email, "Super", PASSWORD)
+    store.set_role(email, "SUPERADMIN")
+    return email
 
 
 def reading(**changes):
@@ -285,6 +302,7 @@ class ApiTests(unittest.TestCase):
         self.store = mysql_double(self.path, self)
         for email in ("admin@example.com", "second@example.com"):
             self.store.save_admin(email, None, PASSWORD)
+        crear_super(self.store)
         self.backend = DemoClient(seed=False)
         self.analytics = RecordingAnalytics()
         self.app = create_app(self.backend, "lambda", auth_path=self.temp.name + "/local.sqlite3",
@@ -360,11 +378,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([o for o, *_ in self.analytics.llamadas], ["api", "api"])
 
     def test_delete_logout_and_revocation(self):
-        admin, second = self.token(), self.token("second@example.com")
+        # Desde la matriz de roles solo el SUPERADMIN elimina; el ADMIN recibe 403 aunque mande la petición a mano.
+        admin, second, sup = self.token(), self.token("second@example.com"), self.token("super@example.com")
         self.call("POST", "/api/readings", admin, reading(), key="key-create-02")
         path = "/api/readings/LOC-CDMX/2026-11-19T18:00:00Z"
-        self.assertEqual(self.call("DELETE", path, admin)[0].status_code, 428)
-        self.assertEqual(self.call("DELETE", path, admin, version=1)[0].status_code, 200)
+        self.assertEqual(self.call("DELETE", path, admin, version=1)[0].status_code, 403)
+        self.assertEqual(len(self.backend.table.rows), 1)
+        self.assertEqual(self.call("DELETE", path, sup)[0].status_code, 428)
+        self.assertEqual(self.call("DELETE", path, sup, version=1)[0].status_code, 200)
         self.assertEqual(len(self.backend.table.rows), 0)
         self.call("POST", "/api/auth/logout", admin)
         self.assertEqual(self.call("GET", "/api/me", admin)[0].status_code, 401)
@@ -373,7 +394,8 @@ class ApiTests(unittest.TestCase):
         db = sqlite3.connect(self.path)
         actions = {r[0] for r in db.execute("SELECT action FROM audit_events")}
         db.close()
-        self.assertTrue({"LOGIN", "READING_CREATE", "READING_DELETE", "LOGOUT", "USER_DISABLE", "ADMIN_CREATE"} <= actions)
+        self.assertTrue({"LOGIN", "READING_CREATE", "READING_DELETE", "LOGOUT", "USER_DISABLE", "ADMIN_CREATE",
+                         "ACCESS_DENIED"} <= actions)
 
 
 class WebTests(unittest.TestCase):
@@ -381,6 +403,7 @@ class WebTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.addCleanup(self.temp.cleanup)
         self.store = mysql_double(self.temp.name + "/mysql.db", self)
         self.store.save_admin("admin@example.com", "Admin", PASSWORD)
+        crear_super(self.store)
         self.backend = DemoClient(seed=False)
         self.analytics = RecordingAnalytics()
         self.app = create_app(self.backend, "lambda", auth_path=self.temp.name + "/local.sqlite3",
@@ -419,7 +442,8 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.analytics.llamadas[0][0], "alta")
 
     def test_administrators_password_and_audit_rotation(self):
-        self.login()
+        # Gestionar cuentas y la bitácora es del SUPERADMIN (test_roles.py prueba que el ADMIN recibe 403).
+        self.login("super@example.com")
         for page in ("/admin/users", "/admin/audit", "/account/password", "/records", "/import"):
             self.assertEqual(self.web.get(page).status_code, 200)
         self.assertEqual(self.web.get("/admin/locations").status_code, 404)
@@ -438,7 +462,7 @@ class WebTests(unittest.TestCase):
                                                             "password": "brand-new-pass-1", "confirm": "brand-new-pass-1"})
         self.assertEqual(response.headers["Location"], "/login")
         self.assertEqual(self.web.get("/records").status_code, 302)        # session closed
-        self.assertEqual(self.login(password="brand-new-pass-1").status_code, 302)
+        self.assertEqual(self.login("super@example.com", password="brand-new-pass-1").status_code, 302)
 
 
 class ModelTests(unittest.TestCase):

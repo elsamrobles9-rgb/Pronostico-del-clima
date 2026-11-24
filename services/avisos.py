@@ -41,7 +41,7 @@ ACCIONES = {"LOGIN": "Sign-in", "LOGOUT": "Sign-out", "READING_CREATE": "Reading
             "USER_CREATE": "User created", "PASSWORD_CHANGE": "Password changed",
             "PASSWORD_RESET": "Password changed", "USER_DISABLE": "Administrator disabled",
             "USER_ENABLE": "Administrator enabled", "AUDIT_ROTATE": "Audit log archived",
-            "ACCESS_DENIED": "Access denied"}
+            "ACCESS_DENIED": "Access denied", "ROLE_CHANGE": "Role changed", "PROFILE_UPDATE": "Profile updated"}
 RESULTADOS = {"SUCCESS": "Success", "FAILURE": "Failed", "BLOCKED": "Blocked", "REJECTED": "Rejected",
               "DENIED": "Denied"}
 SIN_CONEXION = ("There is no connection to the databases or to AWS. The lab or the RDS databases may be stopped. "
@@ -50,6 +50,16 @@ SIN_CONEXION = ("There is no connection to the databases or to AWS. The lab or t
 # (words that appear in the technical error, clear message). The first match wins.
 # Some patterns are in Spanish because the Lambdas and the stored procedures answer in Spanish.
 REGLAS = [
+    # Roles y cuentas (services/roles.py). Van primero porque contienen palabras de otras reglas.
+    (("permission denied",), "Your account does not have permission for this action."),
+    (("account with that",), "An administrator with that email already exists. To replace their password, "
+                             "use the change-password option of that account."),
+    (("account does not exist",), "That administrator account does not exist."),
+    (("same account",), "Only the super administrator who owns that account can change its password."),
+    (("at least one active super",), "The system must always keep at least one active super administrator."),
+    (("from the panel",), "Super administrator accounts cannot be disabled, enabled or changed from the panel."),
+    (("only the super administrator",), "Only the super administrator can do this."),
+    (("own password",), "To change your own password use “My password”."),
     (("user with that", "user with this"), "An administrator with that email already exists. To change their "
                                            "password use the same form: it is replaced."),
     (("user not found",), "That administrator does not exist."),
