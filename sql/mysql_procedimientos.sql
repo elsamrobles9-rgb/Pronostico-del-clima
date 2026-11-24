@@ -1,12 +1,18 @@
 -- =====================================================================================
 -- AWS Clima V2 · Stored procedures de MySQL climate_transactional (RDS 1)
---   SP 12 · sp_guardar_admin    alta de administrador o cambio de contraseña
+--   SP 12 · sp_guardar_admin    alta de administrador o cambio de contraseña (con roles)
 --   SP 13 · sp_rotar_auditoria  rotación e historización de la bitácora y limpieza de sesiones
 --
--- Cómo instalar: .\.venv\Scripts\python.exe etl\instalar_sp.py
+-- Cómo instalar: .\.venv\Scripts\python.exe etl\instalar_sp.py --solo-mysql
+--   (etl\migrar_superadmin.py también lo reinstala al agregar el rol SUPERADMIN)
 -- Se puede ejecutar más de una vez (IF NOT EXISTS / DROP PROCEDURE IF EXISTS).
 -- Los UUID v4 los genera la aplicación (MySQL solo tiene UUID() versión 1).
 -- Las contraseñas NUNCA llegan aquí: la aplicación manda solo el hash (scrypt).
+--
+-- Roles (services/roles.py): las cuentas nuevas siempre son ADMIN. Con actor (panel o API) solo un
+-- SUPERADMIN activo crea cuentas o cambia contraseñas ajenas, y la contraseña de un SUPERADMIN solo
+-- la cambia esa misma cuenta. Sin actor (línea de comandos con la contraseña de la base) se permite.
+-- La firma de sp_guardar_admin no cambió: la Lambda ClimateDbV2 anterior sigue funcionando.
 -- =====================================================================================
 
 -- Historial de la bitácora: mismas columnas que audit_events + la fecha en que se archivó.
@@ -38,8 +44,10 @@ DELIMITER //
 -- -------------------------------------------------------------------------------------
 -- SP 12 · Alta de administrador o cambio de contraseña, en una sola transacción.
 --   - Si el correo no existe: crea el usuario con rol ADMIN (p_accion = 'CREADO').
---   - Si existe y es ADMIN: cambia el hash, sube auth_version y revoca todas sus sesiones,
---     así cualquier token anterior deja de servir al instante (p_accion = 'CONTRASENA').
+--   - Si existe y es ADMIN o SUPERADMIN: cambia el hash, sube auth_version y revoca todas sus
+--     sesiones, así cualquier token anterior deja de servir al instante (p_accion = 'CONTRASENA').
+--   - Con p_actor_id: solo un SUPERADMIN activo gestiona cuentas ajenas, y la contraseña de un
+--     SUPERADMIN solo la cambia esa misma cuenta.
 --   - Escribe el evento en audit_events (ADMIN_CREATE o PASSWORD_CHANGE).
 -- -------------------------------------------------------------------------------------
 CREATE PROCEDURE sp_guardar_admin(
@@ -59,6 +67,7 @@ BEGIN
     DECLARE v_rol SMALLINT;
     DECLARE v_usuario CHAR(36);
     DECLARE v_rol_actual VARCHAR(30);
+    DECLARE v_rol_actor VARCHAR(30);
     DECLARE v_ahora DATETIME(6);
     DECLARE v_revocadas INT DEFAULT 0;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -91,6 +100,17 @@ BEGIN
     END IF;
     SET v_usuario = (SELECT user_id FROM users WHERE normalized_email = v_email);
 
+    -- Desde el panel o la API (con actor): crear cuentas o cambiar contraseñas ajenas es solo del
+    -- SUPERADMIN activo. Cambiar la propia contraseña lo puede hacer cualquier cuenta.
+    IF p_actor_id IS NOT NULL AND (v_usuario IS NULL OR v_usuario <> p_actor_id) THEN
+        SET v_rol_actor = (SELECT r.code FROM users u JOIN roles r ON r.role_id = u.role_id
+                            WHERE u.user_id = p_actor_id AND u.is_active = 1);
+        IF v_rol_actor IS NULL OR v_rol_actor <> 'SUPERADMIN' THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Solo el superadministrador puede crear cuentas o cambiar contraseñas de otros';
+        END IF;
+    END IF;
+
     IF v_usuario IS NULL THEN
         INSERT INTO users (user_id, role_id, normalized_email, password_hash, display_name,
                            is_active, auth_version, created_at_utc)
@@ -101,8 +121,12 @@ BEGIN
     ELSE
         SET v_rol_actual = (SELECT r.code FROM users u JOIN roles r ON r.role_id = u.role_id
                             WHERE u.user_id = v_usuario);
-        IF v_rol_actual <> 'ADMIN' THEN
+        IF v_rol_actual NOT IN ('ADMIN', 'SUPERADMIN') THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ese correo pertenece a un usuario que no es administrador';
+        END IF;
+        IF v_rol_actual = 'SUPERADMIN' AND p_actor_id IS NOT NULL AND p_actor_id <> v_usuario THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Solo el propio superadministrador puede cambiar su contraseña';
         END IF;
         UPDATE users
            SET password_hash = p_password_hash,
@@ -121,7 +145,7 @@ BEGIN
     VALUES (p_event_id, p_actor_id,
             IF(p_accion = 'CREADO', 'ADMIN_CREATE', 'PASSWORD_CHANGE'), 'USER', v_email, v_ahora,
             COALESCE(NULLIF(p_request_id, ''), p_event_id), p_transaction_id, NULL,
-            JSON_OBJECT('email', v_email, 'rol', 'ADMIN', 'sesiones_revocadas', v_revocadas,
+            JSON_OBJECT('email', v_email, 'rol', COALESCE(v_rol_actual, 'ADMIN'), 'sesiones_revocadas', v_revocadas,
                         'procedimiento', 'sp_guardar_admin'),
             'SUCCESS', NULL);
     COMMIT;
