@@ -23,25 +23,28 @@
 <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></symbol>
 </svg>
 <header class="ad-header"><div class="ad-header-in">
-<a class="ad-brand" href="{{ url_for('inicio') if current_user else url_for('public_home') }}">◆ CDMX Weather</a>
+<a class="ad-brand" href="{{ url_for('inicio') if current_user else url_for('public_home') }}"><svg class="marca" viewBox="0 0 64 64" aria-hidden="true"><g class="wx-sol"><circle cx="32" cy="32" r="13"/><path class="wx-rayos" d="M32 6v8M32 50v8M6 32h8M50 32h8M13.6 13.6l5.7 5.7M44.7 44.7l5.7 5.7M13.6 50.4l5.7-5.7M44.7 19.3l5.7-5.7"/></g></svg>CDMX Weather</a>
 <span class="ad-pill">Administration</span>
 {% if mode == 'demo' %}<span class="ad-pill modo">{{ 'Offline · real data' if datos_reales else 'Demo mode' }}</span>{% elif mode == 'api' %}<span class="ad-pill modo">AWS · option A</span>{% else %}<span class="ad-pill modo">AWS · Lambdas</span>{% endif %}
 {% if current_user %}
-<nav class="ad-nav" aria-label="Sections">
-<a href="{{ url_for('inicio') }}" class="{{ 'activo' if seccion == 'inicio' }}">Home</a>
-<a href="{{ url_for('index') }}" class="{{ 'activo' if seccion == 'lecturas' }}">Readings</a>
-<a href="{{ url_for('import_records') }}" class="{{ 'activo' if seccion == 'importar' }}">Import</a>
-<a href="{{ url_for('admin_users') }}" class="{{ 'activo' if seccion == 'usuarios' }}">Administrators</a>
-<a href="{{ url_for('admin_audit') }}" class="{{ 'activo' if seccion == 'auditoria' }}">Audit log</a>
-</nav>
 <div class="ad-usuario">
 <a href="{{ url_for('account_password') }}" class="ad-avatar" title="My password" aria-label="My account: {{ current_user.display_name or current_user.username }}">{{ (current_user.display_name or current_user.username)[:2]|upper }}</a>
+<span class="ad-quien"><span class="ad-nombre">{{ current_user.display_name or current_user.username }}</span>{% if rol_texto is defined and rol_texto %}<span class="ad-rol{{ ' super' if current_user.role == 'SUPERADMIN' }}">{{ rol_texto }}</span>{% endif %}</span>
 <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ad-btn chico" type="submit">{{ icon('logout') }} Sign out</button></form>
 </div>
 {% else %}
 <a class="ad-btn chico regresar ad-nav-sin" href="{{ url_for('public_home') }}">{{ icon('back') }} See the weather</a>
 {% endif %}
-</div></header>
+</div>
+{% if current_user %}<nav class="ad-nav" aria-label="Sections">
+<a href="{{ url_for('inicio') }}"{% if seccion == 'inicio' %} class="activo" aria-current="page"{% endif %}>Home</a>
+<a href="{{ url_for('index') }}"{% if seccion == 'lecturas' %} class="activo" aria-current="page"{% endif %}>Readings</a>
+{% if puede is not defined or puede.importar %}<a href="{{ url_for('import_records') }}"{% if seccion == 'importar' %} class="activo" aria-current="page"{% endif %}>Import</a>{% endif %}
+{% if puede is not defined or puede.gestionar_admins %}<a href="{{ url_for('admin_users') }}"{% if seccion == 'usuarios' %} class="activo" aria-current="page"{% endif %}>Administrators</a>{% endif %}
+{% if puede is not defined or puede.ver_bitacora %}<a href="{{ url_for('admin_audit') }}"{% if seccion == 'auditoria' %} class="activo" aria-current="page"{% endif %}>Audit log</a>{% endif %}
+{% if puede is not defined or puede.mi_perfil %}<a href="/account/profile"{% if seccion == 'perfil' %} class="activo" aria-current="page"{% endif %}>My profile</a>{% endif %}
+</nav>{% endif %}
+</header>
 <main class="{% block main_clase %}ad-main{% endblock %}">
 {% block migas %}{% endblock %}
 <div class="ad-alertas">

@@ -1,20 +1,20 @@
 {% extends 'base.html' %}{% from 'icons.html' import icon %}{% set seccion = 'inicio' %}
 {% block titulo %}Home{% endblock %}
 {% block content %}
-<p class="ad-sub">Hi, {{ current_user.display_name or current_user.username }}</p>
+<div class="ad-saludo"><p class="ad-sub">Hi, {{ current_user.display_name or current_user.username }}</p>{% if rol_texto is defined and rol_texto %}<span class="ad-rol{{ ' super' if current_user.role == 'SUPERADMIN' }}">{{ rol_texto }}</span>{% endif %}</div>
 <h1>What would you like to do today?</h1>
-<div class="ad-rejilla ad-mt">
-<a class="ad-atajo" href="{{ url_for('index') }}"><span class="ad-atajo-icono">{{ icon('table') }}</span><span><strong>View and edit readings</strong><span class="txt">Find an hour, correct it or delete it.</span></span></a>
-<a class="ad-atajo" href="{{ url_for('import_records') }}"><span class="ad-atajo-icono">{{ icon('upload') }}</span><span><strong>Import readings</strong><span class="txt">Upload a CSV or JSON file in 3 steps.</span></span></a>
-<a class="ad-atajo" href="{{ url_for('admin_users') }}"><span class="ad-atajo-icono">{{ icon('users') }}</span><span><strong>Administrators</strong><span class="txt">Create accounts or change passwords.</span></span></a>
-<a class="ad-atajo" href="{{ url_for('admin_audit') }}"><span class="ad-atajo-icono">{{ icon('history') }}</span><span><strong>Audit log</strong><span class="txt">Who did what, and when.</span></span></a>
+<div class="ad-rejilla ad-atajos">
+<a class="ad-atajo" href="{{ url_for('index') }}"><span class="ad-atajo-icono">{{ icon('table') }}</span><span><strong>View and edit readings</strong><span class="txt">Find an hour and correct it{% if puede is not defined or puede.eliminar %} or delete it{% endif %}.</span></span></a>
+{% if puede is not defined or puede.importar %}<a class="ad-atajo" href="{{ url_for('import_records') }}"><span class="ad-atajo-icono">{{ icon('upload') }}</span><span><strong>Import readings</strong><span class="txt">Upload a CSV or JSON file in 3 steps.</span></span></a>{% endif %}
+{% if puede is not defined or puede.gestionar_admins %}<a class="ad-atajo" href="{{ url_for('admin_users') }}"><span class="ad-atajo-icono">{{ icon('users') }}</span><span><strong>Administrators</strong><span class="txt">Create accounts, turn them on or off and change passwords.</span></span></a>{% endif %}
+{% if puede is not defined or puede.ver_bitacora %}<a class="ad-atajo" href="{{ url_for('admin_audit') }}"><span class="ad-atajo-icono">{{ icon('history') }}</span><span><strong>Audit log</strong><span class="txt">Who did what, and when.</span></span></a>{% endif %}
 </div>
 <h2 class="ad-mt2">System status</h2>
 {% if pagina %}
 <div class="ad-rejilla">
 <div class="ad-dato"><span class="lbl">Last reading</span><span class="val">{{ pagina.actual.temperatura if pagina.actual else '—' }}°</span><span class="nota">{{ pagina.actual.hora|en if pagina.actual else 'No readings' }} (Mexico City time)</span></div>
 <div class="ad-dato"><span class="lbl">Full days of history</span><span class="val">{{ pagina.historia.dias }}</span><span class="nota">{{ pagina.historia.desde|short_date }}, {{ pagina.historia.desde.year }} to {{ pagina.historia.hasta|short_date }}, {{ pagina.historia.hasta.year }}</span></div>
-<div class="ad-dato"><span class="lbl">Active administrators</span><span class="val">{{ admins if admins is not none else '—' }}</span><span class="nota">With access to this panel</span></div>
+{% if admins is not none %}<div class="ad-dato"><span class="lbl">Active administrators</span><span class="val">{{ admins }}</span><span class="nota">With access to this panel</span></div>{% endif %}
 <div class="ad-dato"><span class="lbl">Published forecast</span><span class="val">7 days</span><span class="nota">With an hour-by-hour breakdown</span></div>
 </div>
 {% else %}
@@ -22,9 +22,9 @@
 {% endif %}
 <div class="ad-rejilla ancha ad-mt">
 {% if pagina and pagina.actual %}<section class="ad-visitante">{{ icon('cloud') }}<div><p class="claro">What visitors see right now</p><p class="grande">{{ pagina.actual.temperatura }}° · {{ pagina.actual.texto|en }}</p>{% if pagina.dias %}<p class="claro">Today {{ pagina.dias[0].maxima }}° / {{ pagina.dias[0].minima }}° · rain {{ pagina.dias[0].prob }} %</p>{% endif %}</div><a href="{{ url_for('public_home') }}">Open public page</a></section>{% endif %}
-<section class="ad-tarjeta"><h2>Recent activity</h2>
+<section class="ad-tarjeta"><h2>Recent activity</h2>{% if puede is defined and not puede.ver_bitacora %}<p class="ad-nota ad-nota-arriba">Your own actions</p>{% endif %}
 {% if eventos %}<ul class="ad-lista">{% for e in eventos %}<li><span class="ad-punto {{ '' if e.outcome == 'SUCCESS' else 'malo' }}" aria-hidden="true"></span>{{ e.action|accion }}{% if e.outcome != 'SUCCESS' %} ({{ e.outcome|resultado|lower }}){% endif %}<span class="cuando">{{ e.occurred_at_utc|hora_local }}</span></li>{% endfor %}</ul>
 {% else %}<p class="ad-sub">No activity recorded yet, or the audit log did not respond.</p>{% endif %}
-<a href="{{ url_for('admin_audit') }}">See the full audit log</a></section>
+{% if puede is not defined or puede.ver_bitacora %}<a href="{{ url_for('admin_audit') }}">See the full audit log</a>{% endif %}</section>
 </div>
 {% endblock %}
