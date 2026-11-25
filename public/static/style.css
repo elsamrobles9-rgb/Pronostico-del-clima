@@ -167,6 +167,12 @@ label.campo,.campo{display:flex;flex-direction:column;gap:6px;font-size:14px;lin
 .ad-tabla tr.problema{background:var(--danger-tint)}
 .ad-tabla td .ad-etiqueta.mal,.ad-tabla td .ad-etiqueta.alerta{white-space:normal}
 td form{margin:0}
+.cond{padding:3px 10px 3px 4px}
+.cond-icono{display:inline-flex}
+.cond .wx{width:22px;height:22px}
+.cond-despejado{background:var(--accent-tint);border-color:transparent}
+.cond-nublado{background:var(--line);border-color:transparent}
+.cond-lluvia,.cond-tormenta{background:var(--olive-tint);border-color:transparent}
 .ad-vacio{padding:56px 16px;text-align:center;color:var(--text-2)}
 .ad-vacio h2{margin-bottom:8px}
 .ad-paginacion{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px;font-size:15px;color:var(--text-2)}

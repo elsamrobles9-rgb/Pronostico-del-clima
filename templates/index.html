@@ -1,24 +1,25 @@
-{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = 'lecturas' %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from 'weather_icons.html' import wx %}{% from '_migas.html' import migas %}{% set seccion = 'lecturas' %}
 {% block titulo %}Readings{% endblock %}
 {% block migas %}{{ migas([('Home', url_for('inicio')), ('Readings', None)], ('Back to home', url_for('inicio'))) }}{% endblock %}
 {% block content %}
-<div class="ad-cabeza"><div><h1>Hourly readings</h1><p class="ad-sub">Mexico City readings stored in DynamoDB. Edit or delete any hour.</p></div>
-<div class="ad-acciones"><a class="ad-btn" href="{{ url_for('import_records') }}">{{ icon('upload') }} Import</a><a class="ad-btn primario" href="{{ url_for('add') }}">{{ icon('add') }} New reading</a></div></div>
+{% set iconos = {'COND-CLEAR': 'despejado', 'COND-PARTLY-CLOUDY': 'nubes-claros', 'COND-OVERCAST': 'nublado', 'COND-FOG': 'niebla', 'COND-DRIZZLE': 'lluvia', 'COND-RAIN': 'lluvia', 'COND-STORM': 'tormenta', 'COND-SNOW': 'nieve'} %}
+<div class="ad-cabeza"><div><h1>Hourly readings</h1><p class="ad-sub">Mexico City readings stored in DynamoDB. {% if puede is not defined or puede.eliminar %}Edit or delete any hour.{% else %}Edit any hour.{% endif %}</p></div>
+<div class="ad-acciones">{% if puede is not defined or puede.importar %}<a class="ad-btn" href="{{ url_for('import_records') }}">{{ icon('upload') }} Import</a>{% endif %}{% if puede is not defined or puede.agregar %}<a class="ad-btn primario" href="{{ url_for('add') }}">{{ icon('add') }} New reading</a>{% endif %}</div></div>
 <form class="ad-filtros" method="get" action="{{ url_for('ir_a_hora') }}">
 <label class="campo">Go to a day<input type="date" name="dia" value="{{ request.args.get('dia', '') }}" required></label>
-<label class="campo">Hour (Mexico City)<select name="hora">{% for h in range(24) %}<option value="{{ '%02d' % h }}">{{ '%02d' % h }}:00</option>{% endfor %}</select></label>
+<label class="campo">Hour (Mexico City)<select name="hora">{% for h in range(24) %}<option value="{{ '%02d' % h }}"{% if request.args.get('hora') == '%02d' % h %} selected{% endif %}>{{ '%02d' % h }}:00</option>{% endfor %}</select></label>
 <button class="ad-btn" type="submit">{{ icon('search') }} Open that hour</button>
 </form>
 <div class="ad-tabla-caja"><table class="ad-tabla"><thead><tr><th scope="col">Date and time (Mexico City)</th><th scope="col">Temperature</th><th scope="col">Humidity</th><th scope="col">Rain</th><th scope="col">Condition</th><th scope="col">Source</th><th scope="col">Version</th><th scope="col"><span class="ad-sr">Actions</span></th></tr></thead><tbody>
 {% for row in rows %}<tr>
 <td><span class="fuerte">{{ row.timestamp_utc|hora_local('fecha') }}</span><br><span class="gris">{{ row.timestamp_utc|hora_local('hora') }} · {{ row.location_id }}</span></td>
 <td class="fuerte">{{ row.get('temperature_c', '—') }} °C</td><td>{{ row.get('humidity_pct', '—') }} %</td><td>{{ row.get('precipitation_mm', '—') }} mm</td>
-<td><span class="ad-etiqueta">{{ row.get('condition_id')|condicion }}</span></td>
+<td>{% set cielo = iconos.get(row.get('condition_id'), 'nubes-claros') %}<span class="ad-etiqueta cond cond-{{ cielo }}"><span class="cond-icono" aria-hidden="true">{{ wx(cielo, True, 'wx') }}</span>{{ row.get('condition_id')|condicion }}</span></td>
 <td class="gris">{{ 'Open-Meteo' if row.get('source_id') == 'SRC-OPENMETEO' else ('Manual entry' if row.get('source_id') == 'SRC-MANUAL' else row.get('source_id', '—')) }}</td>
 <td class="gris">v{{ row.get('version', '—') }}</td>
-<td><div class="derecha"><a class="ad-btn chico" title="Edit" aria-label="Edit the reading of {{ row.timestamp_utc|hora_local }}" href="{{ url_for('edit', location_id=row.location_id, timestamp_utc=row.timestamp_utc) }}">{{ icon('edit') }} Edit</a>
-<a class="ad-btn chico icono suave-peligro" title="Delete" aria-label="Delete the reading of {{ row.timestamp_utc|hora_local }}" href="{{ url_for('delete', location_id=row.location_id, timestamp_utc=row.timestamp_utc) }}">{{ icon('delete') }}</a></div></td>
-</tr>{% else %}<tr><td colspan="8"><div class="ad-vacio"><h2>No readings to show</h2><p>If you expected data, DynamoDB may not have answered (check the notices above). You can also enter a new reading or import a file.</p><a class="ad-btn primario" href="{{ url_for('add') }}">{{ icon('add') }} New reading</a></div></td></tr>{% endfor %}
+<td><div class="derecha">{% if puede is not defined or puede.editar %}<a class="ad-btn chico" title="Edit" aria-label="Edit the reading of {{ row.timestamp_utc|hora_local }}" href="{{ url_for('edit', location_id=row.location_id, timestamp_utc=row.timestamp_utc) }}">{{ icon('edit') }} Edit</a>{% endif %}
+{% if puede is not defined or puede.eliminar %}<a class="ad-btn chico icono suave-peligro" title="Delete" aria-label="Delete the reading of {{ row.timestamp_utc|hora_local }}" href="{{ url_for('delete', location_id=row.location_id, timestamp_utc=row.timestamp_utc) }}">{{ icon('delete') }}</a>{% endif %}</div></td>
+</tr>{% else %}<tr><td colspan="8"><div class="ad-vacio"><h2>No readings to show</h2><p>If you expected data, DynamoDB may not have answered (check the notices above). You can also enter a new reading or import a file.</p>{% if puede is not defined or puede.agregar %}<a class="ad-btn primario" href="{{ url_for('add') }}">{{ icon('add') }} New reading</a>{% endif %}</div></td></tr>{% endfor %}
 </tbody></table></div>
 <div class="ad-paginacion"><span>{{ rows|length }} readings on this page{% if q %} · filter: {{ q }}{% endif %}</span>
 <div class="ad-acciones">{% if request.args.get('cursor') %}<a class="ad-btn" href="{{ url_for('index', q=q) }}">{{ icon('back') }} Back to the start</a>{% endif %}{% if cursor %}<a class="ad-btn" href="{{ url_for('index', q=q, cursor=cursor) }}">Next page {{ icon('next') }}</a>{% endif %}</div></div>
