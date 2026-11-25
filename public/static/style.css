@@ -101,6 +101,7 @@ code{font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:v
 .ad-acciones{display:flex;gap:12px;flex-wrap:wrap}
 .ad-tarjeta,.card{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r-xl);padding:32px}
 .ad-tarjeta h2,.card h2{margin-bottom:16px}
+.ad-tarjeta h2 .icon{width:22px;height:22px;margin-right:6px;vertical-align:-3px}
 .ad-rejilla{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
 .ad-rejilla.ancha{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}
 .ad-nota{margin:12px 0 0;font-size:14px;color:var(--text-2)}
