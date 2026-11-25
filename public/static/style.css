@@ -144,6 +144,8 @@ label.campo,.campo{display:flex;flex-direction:column;gap:6px;font-size:14px;lin
 .campo .unidad span{font-weight:500;color:var(--text-2)}
 .ad-campos{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px 24px}
 .ad-form{display:flex;flex-direction:column;gap:20px}
+.ad-form h2{display:flex;align-items:center;gap:12px}
+.ad-num{width:32px;height:32px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--accent-tint);font-family:var(--f-text);font-size:15px;font-weight:700}
 .ad-filtros{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin:28px 0 20px}
 .ad-filtros .campo{width:auto}
 .ad-inline{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
