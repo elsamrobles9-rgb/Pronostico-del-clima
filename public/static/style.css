@@ -153,7 +153,10 @@ label.campo,.campo{display:flex;flex-direction:column;gap:6px;font-size:14px;lin
 .ad-barra{position:sticky;bottom:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 0;border-top:1px solid var(--line);background:var(--bg)}
 .ad-tarjeta .ad-barra{background:var(--surface)}
 .ad-archivo{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:24px;border:2px dashed var(--field);border-radius:var(--r-xl);background:var(--bg)}
-.ad-archivo>.icon{width:40px;height:40px;stroke-width:1.5}
+.ad-archivo>.icon{width:56px;height:56px;padding:12px;border-radius:50%;background:var(--accent-tint);stroke-width:1.5}
+.ad-tarjeta form>.ad-nota,.ad-tarjeta>.ad-nota{margin-bottom:16px}
+.ad-etiqueta .icon{width:14px;height:14px;stroke-width:2.4}
+.ad-lista li>.icon{color:var(--text-2)}
 .ad-archivo input[type=file]{min-height:0;padding:8px 0;border:0;background:transparent}
 .ad-archivo input[type=file]::file-selector-button{margin-right:12px;padding:10px 16px;border:1.5px solid var(--text);border-radius:var(--r-sm);background:var(--surface);color:var(--text);font:600 15px var(--f-text);cursor:pointer}
 
