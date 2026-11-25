@@ -177,7 +177,7 @@ td form{margin:0}
 .ad-visitante .claro{font-size:14px;color:var(--on-dark-2)}
 .ad-visitante .grande{font-family:var(--f-display);font-size:36px;line-height:1.15;font-weight:600;letter-spacing:-.02em}
 .ad-visitante a{margin-left:auto;min-height:44px;display:inline-flex;align-items:center;color:var(--on-dark);font-weight:600}
-.ad-visitante>.icon,.ad-login-azul>.icon{width:52px;height:52px;color:var(--accent);stroke-width:1.5}
+.ad-visitante>.icon{width:52px;height:52px;color:var(--accent);stroke-width:1.5}
 .ad-lista{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:12px;font-size:15px}
 .ad-lista li{display:flex;align-items:center;gap:10px}
 .ad-lista .cuando{margin-left:auto;white-space:nowrap;font-size:14px;color:var(--text-2)}
@@ -205,13 +205,19 @@ td form{margin:0}
 .ad-error .que{margin:20px 0;padding:16px 18px;border-radius:var(--r-md);background:var(--bg)}
 
 /* ---------- 15. Inicio de sesión ---------- */
-.ad-login{display:flex;align-items:stretch;gap:32px;flex-wrap:wrap;padding:24px 0}
-.ad-login-azul{flex:1 1 440px;min-height:480px;display:flex;flex-direction:column;justify-content:flex-end;gap:16px;padding:48px;border-radius:var(--r-xl);background:var(--text);color:var(--on-dark)}
-.ad-login-azul h1{color:var(--on-dark);font-size:clamp(2.25rem,3.5vw,3.5rem);line-height:1.05}
-.ad-login-azul p{margin:0;font-size:18px;color:var(--on-dark-2)}
-.ad-login-form{flex:1 1 380px;padding:40px}
+.ad-login{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px;padding:8px 0}
+.ad-login-azul{position:relative;overflow:hidden;min-height:520px;display:flex;flex-direction:column;justify-content:flex-end;gap:16px;padding:48px;border-radius:var(--r-xl);background:var(--text);color:var(--on-dark)}
+.login-sol{position:absolute;top:24px;right:24px;width:240px;height:240px}
+.login-eyebrow{font-size:12px;line-height:16px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.ad-login-azul h1{max-width:12ch;color:var(--on-dark);font-size:clamp(2.75rem,4.5vw,4.25rem);line-height:1;letter-spacing:-.04em}
+.ad-login-azul p{max-width:44ch;margin:0;font-size:18px;color:var(--on-dark-2)}
+.ad-login-form{display:flex;flex-direction:column;justify-content:center;padding:48px}
+.ad-login-form h2{margin:0;font-size:32px;letter-spacing:-.02em}
 .ad-login-form form{display:flex;flex-direction:column;gap:18px}
 .ad-login-form .ad-btn.primario{width:100%;min-height:56px}
+.login-notas{list-style:none;display:flex;flex-direction:column;gap:10px;margin:24px 0 0;padding:20px 0 0;border-top:1px solid var(--line);font-size:14px;color:var(--text-2)}
+.login-notas li{display:flex;align-items:flex-start;gap:10px}
+.login-notas .icon{width:18px;height:18px;margin-top:1px;color:var(--text)}
 
 /* ---------- 16. Página pública ---------- */
 body.publico{display:flex;flex-direction:column;min-height:100vh}
