@@ -213,7 +213,10 @@ td form{margin:0}
 
 /* ---------- 14. Confirmar eliminación y errores ---------- */
 .ad-confirmar{max-width:680px;margin:0 auto}
-.ad-confirmar dl{display:grid;grid-template-columns:max-content 1fr;gap:10px 24px;margin:20px 0}
+.ad-peligro{border-top:6px solid var(--danger);padding-top:40px}
+.ad-peligro-icono{width:56px;height:56px;margin-bottom:16px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--danger-tint);color:var(--danger-text)}
+.ad-peligro-icono .icon{width:28px;height:28px}
+.ad-confirmar dl{padding:20px;border-radius:var(--r-md);background:var(--bg);display:grid;grid-template-columns:max-content 1fr;gap:10px 24px;margin:20px 0}
 .ad-confirmar dt{font-size:14px;color:var(--text-2)}
 .ad-confirmar dd{margin:0;font-weight:600}
 .ad-error{max-width:720px;margin:24px auto}
