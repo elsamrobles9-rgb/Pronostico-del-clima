@@ -2,6 +2,7 @@
 {% block titulo %}{{ title }}{% endblock %}
 {% block content %}
 <section class="ad-tarjeta ad-error">
+<span class="ad-error-num" aria-hidden="true">{{ codigo or '!' }}</span>
 <p class="codigo">{{ 'ERROR ' ~ codigo if codigo else 'NOTICE' }}</p>
 <h1>{{ title }}</h1>
 <p>{{ message }}</p>
