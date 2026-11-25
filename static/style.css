@@ -223,7 +223,10 @@ td form{margin:0}
 .ad-confirmar dl{padding:20px;border-radius:var(--r-md);background:var(--bg);display:grid;grid-template-columns:max-content 1fr;gap:10px 24px;margin:20px 0}
 .ad-confirmar dt{font-size:14px;color:var(--text-2)}
 .ad-confirmar dd{margin:0;font-weight:600}
-.ad-error{max-width:720px;margin:24px auto}
+.ad-error{position:relative;overflow:hidden;max-width:760px;margin:24px auto;padding:48px}
+.ad-error-num{display:block;margin-bottom:8px;font-family:var(--f-display);font-size:120px;line-height:.9;font-weight:650;letter-spacing:-.05em;color:var(--accent)}
+.ad-angosta{max-width:880px}
+.ad-archivar .ad-sub{font-size:15px;margin:0 0 16px}
 .ad-error .codigo{margin:0 0 8px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:.12em;color:var(--text-2)}
 .ad-error h1{margin-bottom:12px}
 .ad-error .que{margin:20px 0;padding:16px 18px;border-radius:var(--r-md);background:var(--bg)}
