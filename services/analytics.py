@@ -129,6 +129,24 @@ class BaseAnalytics:
                     titulo_dia=fecha_larga(seleccionado), hoy=hoy, phi=modelo.phi,
                     historia=dict(dias=len(modelo.fechas), desde=modelo.fechas[0], hasta=modelo.fechas[-1]))
 
+    # ------------------------------------------------------------------ registros públicos (visitante)
+    def rango_dias(self):
+        """(primer día, último día) locales con lecturas, o (None, None)."""
+        raise NotImplementedError
+
+    def horas_de(self, dia):
+        """Lecturas (formato del modelo) de un día local de la CDMX, en orden."""
+        raise NotImplementedError
+
+    def lecturas_dia(self, dia=None):
+        """Lo que muestra /registros: las lecturas por hora de un día (por omisión, el último con datos)."""
+        primero, ultimo = self.rango_dias()
+        if primero is None:
+            return dict(dia=dia, filas=[], primero=None, ultimo=None)
+        dia = dia or ultimo
+        filas = [fila_publica(h) for h in self.horas_de(dia)] if primero <= dia <= ultimo else []
+        return dict(dia=dia, filas=filas, primero=primero, ultimo=ultimo)
+
     def actual(self):
         lectura = self.ultima_lectura()
         if not lectura:
@@ -149,6 +167,23 @@ class BaseAnalytics:
 
 CAMPOS_HORA = ("temperature_c", "feels_like_c", "humidity_pct", "precipitation_mm", "wind_speed_kmh",
                "wind_direction", "uv_index", "cloud_cover_pct", "condition_id")
+
+
+def fila_publica(h):
+    """Una lectura (formato del modelo) -> fila de la página pública de registros (solo lectura)."""
+    local = M.a_local(h["ts_utc"])
+    icono, texto = M.condicion_lectura(h.get("condition_id"))
+
+    def numero(valor, decimales=1):
+        return None if valor is None else round(float(valor), decimales)
+
+    def entero(valor):
+        return None if valor is None else int(round(float(valor)))
+    return dict(hora=f"{local.hour:02d}:{local.minute:02d}", icono=icono, texto=texto, dia_luz=M.es_de_dia(local.hour),
+                temperatura=numero(h.get("temperature_c")), sensacion=numero(h.get("feels_like_c")),
+                humedad=entero(h.get("humidity_pct")), lluvia=numero(h.get("precipitation_mm")),
+                viento=entero(h.get("wind_speed_kmh")), rumbo=h.get("wind_direction") or "",
+                uv=numero(h.get("uv_index")), nubes=entero(h.get("cloud_cover_pct")))
 
 
 def hora_desde_lectura(lectura):
@@ -196,6 +231,14 @@ class DemoAnalytics(BaseAnalytics):
     def ultima_lectura(self):
         return self.horas[-1]
 
+    def rango_dias(self):
+        if not self.horas:
+            return None, None
+        return M.a_local(self.horas[0]["ts_utc"]).date(), M.a_local(self.horas[-1]["ts_utc"]).date()
+
+    def horas_de(self, dia):
+        return [h for h in self.horas if M.a_local(h["ts_utc"]).date() == dia]
+
     def upsert(self, records, origen, fuentes, condiciones):
         self.sincronizadas.append((origen, len(records)))
         if self.datos_reales and records:
@@ -241,6 +284,31 @@ class PostgresAnalytics(BaseAnalytics):
                         f" ORDER BY o.timestamp_utc DESC LIMIT 1", (FIXED_LOCATION,))
             fila = cur.fetchone()
         return dict(zip(columnas, fila)) if fila else None
+
+    COLUMNAS_PUBLICAS = ("ts_utc", "temperature_c", "feels_like_c", "humidity_pct", "precipitation_mm",
+                         "wind_speed_kmh", "wind_direction", "uv_index", "cloud_cover_pct", "condition_id")
+
+    def rango_dias(self):
+        with self.db.tx() as cur:
+            cur.execute(f"SELECT MIN(o.timestamp_utc), MAX(o.timestamp_utc)"
+                        f" FROM {self.SCHEMA}.observations o JOIN {self.SCHEMA}.series s ON s.series_id = o.series_id"
+                        f" WHERE s.location_id = %s AND o.deleted_at_utc IS NULL", (FIXED_LOCATION,))
+            fila = cur.fetchone()
+        if not fila or fila[0] is None:
+            return None, None
+        return M.a_local(fila[0]).date(), M.a_local(fila[1]).date()
+
+    def horas_de(self, dia):
+        inicio = (datetime.combine(dia, datetime.min.time()) - M.DESFASE).replace(tzinfo=timezone.utc)
+        with self.db.tx() as cur:
+            cur.execute(f"SELECT o.timestamp_utc, o.temperature_c, o.feels_like_c, o.humidity_pct, o.precipitation_mm,"
+                        f" o.wind_speed_kmh, o.wind_direction, o.uv_index, o.cloud_cover_pct, o.condition_id"
+                        f" FROM {self.SCHEMA}.observations o JOIN {self.SCHEMA}.series s ON s.series_id = o.series_id"
+                        f" WHERE s.location_id = %s AND o.deleted_at_utc IS NULL"
+                        f" AND o.timestamp_utc >= %s AND o.timestamp_utc < %s ORDER BY o.timestamp_utc",
+                        (FIXED_LOCATION, inicio, inicio + timedelta(days=1)))
+            filas = cur.fetchall()
+        return [dict(zip(self.COLUMNAS_PUBLICAS, f)) for f in filas]
 
     def upsert(self, records, origen, fuentes, condiciones):
         """CALL climate_analytics.sp_upsert_lecturas (SP 11)."""

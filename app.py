@@ -1,8 +1,11 @@
 """Layer 1: Flask web portal + REST API for Mexico City weather. Launch with python app.py; no dotenv.
 
-Visitors (no sign-in):  /  -> current weather, 7-day forecast and hour-by-hour breakdown.
-Administrators:         /records, /add, /edit, /delete, /import, /admin/users, /admin/audit,
-                        /account/password and the REST API (/api, Bearer JWT).
+Visitors (no sign-in):  /  -> current weather, 7-day forecast and hour-by-hour breakdown;
+                        /registros -> hourly readings of any day (read only).
+Administrators:         /admin, /records, /add, /edit, /import, /account/profile, /account/password
+                        and the REST API (/api, Bearer JWT).
+Super administrator:    everything above plus /delete, /admin/users and /admin/audit.
+The permission matrix lives in services/roles.py; every route declares what it needs there.
 
 Demo mode:  python app.py                 (sample data, local accounts, no AWS)
 Offline:    python app.py --datos-reales  (the 10,000 real readings from etl/datos/lecturas.jsonl, no AWS)
@@ -18,7 +21,7 @@ import sys
 from datetime import date, datetime, timedelta
 from getpass import getpass
 from pathlib import Path
-from services import avisos, ingles
+from services import avisos, ingles, roles
 from services.access import AccessStore
 from services.avisos import avisar, avisar_error, explicar
 from services.analytics import DemoAnalytics
@@ -46,13 +49,16 @@ FIELDS = [
     ("cloud_cover_pct", "Cloud cover (%)", "number"), ("visibility_km", "Visibility (km)", "number"),
     ("uv_index", "UV index", "number"), ("dew_point_c", "Dew point (°C)", "number")]
 KEYS = ("location_id", "timestamp_utc")
-PUBLIC_PAGES = ('public_home', 'login')
+ADMIN_FORM = {'csrf', 'username', 'display_name', 'password', 'confirm', 'intent'}
+INTENTS = {'': None, 'create': 'create', 'password': 'password'}   # sin intent: crear o cambiar contraseña
+STATUS_FORM = {'csrf', 'username', 'action'}
+PROFILE_FORM = {'csrf', 'display_name'}
 
 ERRORES = {
     400: ('The request is not valid', 'Something in the form or in the address is not right.',
           'Reload the page and try again.'),
-    403: ('You do not have permission', 'This section is for administrators only.',
-          'Sign in with an administrator account.'),
+    403: ('You do not have permission', 'Your account cannot use this section or action.',
+          'Go back to the home page. If you need this access, ask the super administrator.'),
     404: ('We could not find that page', 'The address does not exist or what you were looking for is gone.',
           'Check the address or go back to the home page.'),
     405: ('Action not allowed', 'This page does not accept that action.', 'Use the buttons on the page.'),
@@ -123,8 +129,11 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
     def context():
         if "csrf" not in session: session["csrf"] = secrets.token_urlsafe(32)
         reales = len(analytics.horas) if getattr(analytics, "datos_reales", False) else 0
-        return dict(csrf=session["csrf"], mode=mode, fields=FIELDS, current_user=g.get("user"),
-                    users_store=store.kind, datos_reales=reales, etiquetas=avisos.ETIQUETAS, rumbos=avisos.RUMBOS)
+        usuario = g.get("user")
+        # puede / rol_texto: contrato con las plantillas (la seguridad real está en authorize()).
+        return dict(csrf=session["csrf"], mode=mode, fields=FIELDS, current_user=usuario,
+                    users_store=store.kind, datos_reales=reales, etiquetas=avisos.ETIQUETAS, rumbos=avisos.RUMBOS,
+                    puede=roles.permisos(usuario), rol_texto=roles.etiqueta(usuario))
 
     def pagina_error(codigo, detalle=None):
         titulo, mensaje, que_hacer = ERRORES.get(codigo, ERRORES[500])
@@ -163,12 +172,14 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
         # Antes se trataban como páginas protegidas: borraban la sesión y el login fallaba con
         # "Invalid form token" porque el navegador pide /favicon.ico mientras muestra el formulario.
         if request.endpoint is None: return
+        # Cada ruta declara en services/roles.py lo que necesita; una ruta sin declarar se niega.
+        necesita = roles.RUTAS.get(request.endpoint, roles.DESCONOCIDA)
         try:
             g.user = store.user(session.get('sid', ''))
         except DatabaseUnavailable:
-            if request.endpoint in PUBLIC_PAGES: g.user = None
+            if necesita is None: g.user = None
             else: raise
-        if request.endpoint in PUBLIC_PAGES: return
+        if necesita is None: return
         if not g.user:
             if session.pop('sid', None):     # se quita la sesión vencida; el token del formulario se conserva
                 avisar('warning', 'Your session ended: 30 minutes passed without use, it was closed somewhere else '
@@ -176,7 +187,10 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
             if request.method == 'GET':
                 session['despues'] = request.full_path.rstrip('?')
             return redirect(url_for('login'))
-        if g.user['role'] != 'ADMIN': abort(403)
+        if roles.puede(g.user, necesita): return
+        audit('ACCESS_DENIED', 'ENDPOINT', request.method + ' ' + request.path, 'DENIED',
+              reason=f"role {g.user.get('role')} cannot {necesita}")
+        abort(403)
 
     @app.get('/health')
     def health(): return {'status': 'ok'}
@@ -291,9 +305,14 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
         except Exception as exc:
             app.logger.warning('Estado del pronóstico no disponible: %s', exc)
             pagina = None
-        try: admins = sum(1 for u in store.list_users() if u['active'])
-        except Exception: admins = None
-        try: eventos = store.audit_log(5)
+        # Privacidad: solo el superadministrador ve cuántas cuentas hay y la actividad de todos;
+        # un administrador ve únicamente su propia actividad.
+        admins = None
+        if roles.puede(g.user, 'gestionar_admins'):
+            try: admins = sum(1 for u in store.list_users() if u['active'])
+            except Exception: admins = None
+        try:
+            eventos = store.audit_log(5) if roles.puede(g.user, 'ver_bitacora') else store.audit_log(5, actor=g.user)
         except Exception: eventos = []
         return render_template("inicio.html", pagina=pagina, admins=admins, eventos=eventos)
 
@@ -411,10 +430,18 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
     def admin_users():
         if request.method == 'POST':
             try:
+                # Sin campo de rol: las cuentas nuevas siempre son ADMIN (nadie se vuelve SUPERADMIN desde el panel).
+                if set(request.form) - ADMIN_FORM: raise ValueError('Unknown form fields.')
+                if request.form.get('intent', '') not in INTENTS: raise ValueError('Unknown form action.')
+                username = request.form.get('username', '').strip()
+                if username.lower() == g.user['username'].lower():
+                    raise ValueError('To change your own password use "My password".')
                 if request.form.get('password', '') != request.form.get('confirm', ''):
                     raise ValueError('Passwords do not match.')
-                action = store.save_admin(request.form.get('username', '').strip(), request.form.get('display_name', ''),
-                                          request.form.get('password', ''), actor=g.user)
+                # intent=create rechaza correos repetidos; intent=password exige que la cuenta exista.
+                action = store.save_admin(username, request.form.get('display_name', ''),
+                                          request.form.get('password', ''), actor=g.user,
+                                          mode=INTENTS[request.form.get('intent', '')])
                 avisar('success', 'Administrator created. Share the password through a private channel.' if action == 'CREADO'
                        else 'Password changed. All of that administrator\'s sessions were closed right away.')
                 return redirect(url_for('admin_users'))
@@ -429,6 +456,7 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
     def admin_user_status():
         username, action = request.form.get('username', ''), request.form.get('action', '')
         try:
+            if set(request.form) - STATUS_FORM: raise ValueError('Unknown form fields.')
             if username.lower() == g.user['username'].lower(): raise ValueError('You cannot change your own account here.')
             if action == 'disable': store.disable(username, actor=g.user)
             elif action == 'enable': store.enable(username, actor=g.user)
@@ -451,6 +479,50 @@ def create_app(client=None, mode="demo", auth_path=None, auth_store=None, idempo
                 return redirect(url_for('login'))
             except ValueError as exc: avisar_error(exc)
         return render_template('account_password.html')
+
+    @app.route('/account/profile', methods=['GET', 'POST'])
+    def perfil():
+        """Mi perfil: cada cuenta ve solo sus datos y solo puede cambiar su nombre (nunca su rol)."""
+        if request.method == 'POST':
+            try:
+                if set(request.form) - PROFILE_FORM: raise ValueError('Unknown form fields.')
+                store.update_own_profile(g.user, request.form.get('display_name', ''))
+                avisar('success', 'Your profile was updated.')
+                return redirect(url_for('perfil'))
+            except ValueError as exc: avisar_error(exc)
+        try: datos = store.profile(g.user)
+        except DatabaseUnavailable as exc:
+            avisar_error(exc)
+            datos = None
+        if not datos:
+            datos = {k: g.user.get(k) for k in ('username', 'display_name', 'role')}
+        return render_template('perfil.html', perfil=datos)
+
+    # ------------------------------------------------------------------ public records (visitors)
+    @app.get('/registros')
+    def registros_publicos():
+        """Registros por hora de un día, solo lectura y sin sesión (mismo origen que la página pública)."""
+        texto = request.args.get('dia', '').strip()
+        dia, problem = None, None
+        if texto:
+            try: dia = date.fromisoformat(texto)
+            except ValueError: problem = 'Choose a valid date (YYYY-MM-DD).'
+        datos = None
+        if not problem:
+            try: datos = analytics.lecturas_dia(dia)
+            except Exception as exc:
+                app.logger.warning('Public records unavailable: %s', exc)
+                problem = 'The records are not available right now. Please try again later.'
+        if not datos:
+            return render_template('registros.html', dia=dia, filas=[], anterior=None, siguiente=None,
+                                   primero=None, ultimo=None, problem=problem)
+        dia, primero, ultimo = datos['dia'], datos.get('primero'), datos.get('ultimo')
+        anterior = dia - timedelta(days=1) if dia and primero and dia > primero else None
+        siguiente = dia + timedelta(days=1) if dia and ultimo and dia < ultimo else None
+        if dia and primero and dia < primero: anterior, siguiente = None, primero      # antes de los datos
+        if dia and ultimo and dia > ultimo: anterior, siguiente = ultimo, None         # después de los datos
+        return render_template('registros.html', dia=dia, filas=datos['filas'], anterior=anterior,
+                               siguiente=siguiente, primero=primero, ultimo=ultimo, problem=problem)
 
     @app.get('/admin/audit')
     def admin_audit():
@@ -488,16 +560,25 @@ def mysql_store(region):
     password = getpass('Contraseña de MySQL (no se muestra): ')
     store = MySQLAccessStore(mysql_factory(host, port, user, password))
     admins = store.count_admins()
-    print(f'MySQL conectado: {admins} administrador(es) activo(s).')
+    print(f'MySQL conectado: {admins} cuenta(s) activa(s) con acceso al panel.')
     if admins == 0:
-        print('\nNo hay administradores en la tabla users. Vamos a crear el primero (sp_guardar_admin).')
-        email = input('Correo del administrador: ').strip()
+        print('\nNo hay cuentas en la tabla users. Vamos a crear la primera (sp_guardar_admin);'
+              ' quedará como superadministrador.')
+        email = input('Correo del superadministrador: ').strip()
         name = input('Nombre para mostrar: ').strip()
         first = getpass('Contraseña nueva (12 a 128 caracteres, no se muestra): ')
         if first != getpass('Repite la contraseña: '):
             raise SystemExit('Las contraseñas no coinciden. Vuelve a ejecutar app.py.')
         store.save_admin(email, name, first)
-        print('Administrador creado en MySQL. Inicia sesión con ese correo.\n')
+        try:
+            store.set_role(email, roles.SUPERADMIN)
+            print('Superadministrador creado en MySQL. Inicia sesión con ese correo.\n')
+        except ValueError as exc:
+            print(f'Se creó como administrador, pero no como superadministrador: {exc}\n'
+                  'Corre etl/migrar_superadmin.py para agregar el rol SUPERADMIN y promover esa cuenta.\n')
+    elif store.count_superadmins() == 0:
+        print('AVISO: no hay ningún superadministrador activo. Nadie podrá eliminar registros ni gestionar'
+              ' cuentas. Corre etl/migrar_superadmin.py.')
     return store
 
 

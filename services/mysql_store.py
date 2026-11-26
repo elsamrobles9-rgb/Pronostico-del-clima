@@ -2,6 +2,13 @@
 
 Tables used (they already exist; nothing is created or dropped here):
   roles, users, sessions, audit_events, locations, stations, data_sources, weather_conditions.
+The SUPERADMIN role is added once by etl/migrar_superadmin.py (safe migration, keeps every hash).
+
+Account rules (the same as services/access.py; sp_guardar_admin enforces them again in MySQL):
+  - only ADMIN and SUPERADMIN sign in;
+  - only a SUPERADMIN creates accounts, changes other passwords or enables/disables ADMIN accounts;
+  - nobody can disable, demote or change the password of a SUPERADMIN from the panel;
+  - there is always at least one active SUPERADMIN; roles change only from the command line.
 
 All SQL uses %s parameters (never string formatting) and UTC datetimes calculated in Python.
 """
@@ -19,6 +26,7 @@ from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from contract import dumps
+from services import roles
 from services.catalog import build_catalog
 from services.jwt_tokens import TokenError, TokenSigner
 
@@ -26,8 +34,10 @@ IDLE_LIMIT = timedelta(minutes=30)
 LOCK_WINDOW = timedelta(minutes=15)
 MAX_FAILURES = 5
 TOUCH_EVERY = timedelta(seconds=60)
-ROLES = ("ADMIN", "DATA_ENTRY", "ANALYST")
+ROLES = roles.STAFF + roles.HEREDADOS      # codes in the roles table; only roles.STAFF can sign in
 EMAIL = re.compile(r"[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,180}\.[a-z]{2,24}")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+STAFF_SQL = "('" + "','".join(roles.STAFF) + "')"   # fixed constants, not user input
 
 
 class DatabaseUnavailable(Exception):
@@ -186,7 +196,7 @@ class MySQLAccessStore:
                                   reason="5 failed attempts in 15 minutes")
                 return None
             valid = password_matches(user["password_hash"] if user else self.dummy, password[:129])
-            if not user or not valid or not int(user["is_active"]) or user["role"] != "ADMIN":
+            if not user or not valid or not int(user["is_active"]) or user["role"] not in roles.STAFF:
                 reason = ("inactive user" if not int(user["is_active"]) else "only administrators can sign in") \
                     if user and valid else "invalid credentials"
                 self.insert_audit(cur, actor, "LOGIN", "USER", email, "FAILURE", reason=reason)
@@ -217,7 +227,8 @@ class MySQLAccessStore:
                         " JOIN roles r ON r.role_id = u.role_id WHERE s.session_id = %s AND s.user_id = %s",
                         (claims.get("sid"), claims.get("sub")))
             row = cur.fetchone()
-            if not row or row["revoked_at_utc"] is not None or not int(row["is_active"]) or row["role"] != "ADMIN":
+            if not row or row["revoked_at_utc"] is not None or not int(row["is_active"]) \
+                    or row["role"] not in roles.STAFF:
                 return None
             version = int(row["auth_version"])
             if version != int(row["issued_auth_version"]) or version != claims.get("ver"):
@@ -262,27 +273,62 @@ class MySQLAccessStore:
         fila = cur.fetchone()
         return [fila[f"o{i}"] for i in range(outputs)]
 
-    def save_admin(self, email, display_name, password, actor=None, request_id=None):
-        """Create an administrator or change an administrator's password (SP sp_guardar_admin).
-        Only the scrypt hash reaches the database."""
+    @staticmethod
+    def check_manager(actor, target):
+        """Rules for the web and the API (actor present). The command line (actor None) is trusted:
+        it already holds the database password."""
+        if actor is None:
+            return
+        own = target is not None and target["user_id"] == actor.get("user_id")
+        if not own and not roles.es_super(actor):
+            raise ValueError("Only the super administrator can manage administrator accounts.")
+        if target is not None and target["role"] == roles.SUPERADMIN and not own:
+            raise ValueError("A super administrator's password can only be changed by that same account.")
+
+    def other_active_supers(self, cur, user_id):
+        cur.execute("SELECT COUNT(*) AS n FROM users u JOIN roles r ON r.role_id = u.role_id"
+                    " WHERE r.code = %s AND u.is_active = 1 AND u.user_id <> %s", (roles.SUPERADMIN, user_id))
+        return int(cur.fetchone()["n"])
+
+    def save_admin(self, email, display_name, password, actor=None, request_id=None, mode=None):
+        """Create an administrator or change a password (SP sp_guardar_admin).
+        Only the scrypt hash reaches the database. New accounts are always ADMIN.
+        mode='create' rejects an existing email; mode='password' requires it; None does either."""
         email = normalize_email(email)
         if not EMAIL.fullmatch(email):
             raise ValueError("Enter a valid email address.")
         check_password(password)
+        name = (display_name or "").strip()[:120] or None
+        if name and CONTROL.search(name):
+            raise ValueError("The display name must contain 1 to 120 characters.")
         with self.db.tx() as cur:
+            target = self.find_user(cur, email)
+            if mode == "create" and target is not None:
+                raise ValueError("An account with that email already exists.")
+            if mode == "password" and target is None:
+                raise ValueError("That account does not exist.")
+            if target is not None and target["role"] not in roles.STAFF:
+                raise ValueError("That email belongs to a user who is not an administrator.")
+            self.check_manager(actor, target)
             _, accion = self.call_procedure(cur, "sp_guardar_admin", [
-                email, (display_name or "").strip()[:120] or None, generate_password_hash(password),
+                email, name, generate_password_hash(password),
                 str(uuid.uuid4()), actor["user_id"] if actor else None, str(uuid.uuid4()), str(uuid.uuid4()),
                 (request_id or uuid.uuid4().hex)[:100]], 2)
         return accion
 
     def add_user(self, email, password, role="ADMIN", display_name=None, actor=None):
-        if role != "ADMIN":
+        """Command line: create ADMIN or SUPERADMIN (the panel only creates ADMIN through save_admin)."""
+        if role not in roles.STAFF:
             raise ValueError("Only administrators have accounts; visitors do not sign in.")
+        if actor is not None and role != roles.ADMIN:
+            raise ValueError("Accounts created in the panel are always administrators.")
         with self.db.tx() as cur:
             if self.find_user(cur, normalize_email(email)):
                 raise ValueError("A user with that email already exists.")
-        return self.save_admin(email, display_name, password, actor)
+        accion = self.save_admin(email, display_name, password, actor)
+        if role == roles.SUPERADMIN:
+            self.set_role(email, roles.SUPERADMIN, actor)
+        return accion
 
     def set_password(self, email, password, actor=None):
         with self.db.tx() as cur:
@@ -298,6 +344,53 @@ class MySQLAccessStore:
             raise ValueError("Your current password is not correct.")
         return self.save_admin(user["username"], None, new, user)
 
+    def set_role(self, email, role, actor=None):
+        """Command line and migration only: the web and the API never change roles.
+        Raises auth_version and revokes sessions so the new role applies at the next sign-in."""
+        if role not in roles.STAFF:
+            raise ValueError("Role must be ADMIN or SUPERADMIN.")
+        email = normalize_email(email)
+        now = utcnow()
+        with self.db.tx() as cur:
+            user = self.find_user(cur, email)
+            if not user:
+                raise ValueError("User not found.")
+            if user["role"] == role:
+                return False
+            if user["role"] not in roles.STAFF:
+                raise ValueError("That account is not an administrator.")
+            if user["role"] == roles.SUPERADMIN and int(user["is_active"]) and \
+                    not self.other_active_supers(cur, user["user_id"]):
+                raise ValueError("The system must keep at least one active super administrator.")
+            nuevo = self.role_id(cur, role)
+            cur.execute("UPDATE users SET role_id = %s, auth_version = auth_version + 1 WHERE user_id = %s",
+                        (nuevo, user["user_id"]))
+            cur.execute("UPDATE sessions SET revoked_at_utc = %s WHERE user_id = %s AND revoked_at_utc IS NULL",
+                        (now, user["user_id"]))
+            self.insert_audit(cur, actor["user_id"] if actor else None, "ROLE_CHANGE", "USER", email, "SUCCESS",
+                              before={"role": user["role"]}, after={"role": role}, reason="command line")
+        return True
+
+    def profile(self, user):
+        with self.db.tx() as cur:
+            cur.execute("SELECT u.normalized_email AS username, u.display_name, r.code AS role, u.created_at_utc"
+                        " FROM users u JOIN roles r ON r.role_id = u.role_id WHERE u.user_id = %s",
+                        (user["user_id"],))
+            return cur.fetchone()
+
+    def update_own_profile(self, user, display_name):
+        name = (display_name or "").strip()
+        if not 1 <= len(name) <= 120 or CONTROL.search(name):
+            raise ValueError("The display name must contain 1 to 120 characters.")
+        with self.db.tx() as cur:
+            cur.execute("SELECT display_name FROM users WHERE user_id = %s", (user["user_id"],))
+            before = cur.fetchone()
+            if not before:
+                raise ValueError("User not found.")
+            cur.execute("UPDATE users SET display_name = %s WHERE user_id = %s", (name, user["user_id"]))
+            self.insert_audit(cur, user["user_id"], "PROFILE_UPDATE", "USER", user.get("username", ""), "SUCCESS",
+                              before={"display_name": before["display_name"]}, after={"display_name": name})
+
     def set_active(self, email, active, actor=None):
         email = normalize_email(email)
         now = utcnow()
@@ -305,6 +398,16 @@ class MySQLAccessStore:
             user = self.find_user(cur, email)
             if not user:
                 raise ValueError("User not found.")
+            if actor is not None:
+                if not roles.es_super(actor):
+                    raise ValueError("Only the super administrator can manage administrator accounts.")
+                if user["user_id"] == actor.get("user_id"):
+                    raise ValueError("You cannot change your own account status.")
+                if user["role"] == roles.SUPERADMIN:
+                    raise ValueError("A super administrator account cannot be disabled or enabled from the panel.")
+            if user["role"] == roles.SUPERADMIN and not active and int(user["is_active"]) and \
+                    not self.other_active_supers(cur, user["user_id"]):
+                raise ValueError("The system must keep at least one active super administrator.")
             # Raising auth_version invalidates every token already issued: immediate revocation.
             cur.execute("UPDATE users SET is_active = %s, auth_version = auth_version + 1 WHERE user_id = %s",
                         (1 if active else 0, user["user_id"]))
@@ -326,13 +429,20 @@ class MySQLAccessStore:
         with self.db.tx() as cur:
             cur.execute("SELECT u.normalized_email AS username, u.display_name, r.code AS role, u.is_active AS active,"
                         " u.created_at_utc FROM users u JOIN roles r ON r.role_id = u.role_id"
-                        " WHERE r.code = 'ADMIN' ORDER BY u.created_at_utc")
+                        f" WHERE r.code IN {STAFF_SQL} ORDER BY u.created_at_utc")
             return [dict(row, active=bool(int(row["active"]))) for row in cur.fetchall()]
 
     def count_admins(self):
+        """Active accounts that can sign in (ADMIN + SUPERADMIN)."""
         with self.db.tx() as cur:
             cur.execute("SELECT COUNT(*) AS n FROM users u JOIN roles r ON r.role_id = u.role_id"
-                        " WHERE r.code = 'ADMIN' AND u.is_active = 1")
+                        f" WHERE r.code IN {STAFF_SQL} AND u.is_active = 1")
+            return int(cur.fetchone()["n"])
+
+    def count_superadmins(self):
+        with self.db.tx() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM users u JOIN roles r ON r.role_id = u.role_id"
+                        " WHERE r.code = %s AND u.is_active = 1", (roles.SUPERADMIN,))
             return int(cur.fetchone()["n"])
 
     # ------------------------------------------------------------------ audit
@@ -342,12 +452,15 @@ class MySQLAccessStore:
             self.insert_audit(cur, actor["user_id"] if actor else None, action, entity_type, entity_key,
                               outcome, before, after, reason, request_id)
 
-    def audit_log(self, limit=100):
+    def audit_log(self, limit=100, actor=None):
+        """All events, or only the events of `actor` (what an ADMIN may see)."""
+        filtro, params = ("WHERE a.actor_id = %s", (actor["user_id"], int(limit))) if actor is not None \
+            else ("", (int(limit),))
         with self.db.tx() as cur:
             cur.execute("SELECT a.occurred_at_utc, COALESCE(u.normalized_email, '—') AS actor, a.action,"
                         " a.entity_type, a.entity_key, a.outcome, a.reason, a.request_id"
                         " FROM audit_events a LEFT JOIN users u ON u.user_id = a.actor_id"
-                        " ORDER BY a.occurred_at_utc DESC LIMIT %s", (int(limit),))
+                        f" {filtro} ORDER BY a.occurred_at_utc DESC LIMIT %s", params)
             return cur.fetchall()
 
     def rotate_audit(self, days, actor=None, request_id=None):

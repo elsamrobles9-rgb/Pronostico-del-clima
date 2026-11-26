@@ -3,7 +3,8 @@
     GET  /health  -> {"status": "ok"}
     POST /rpc     -> {"metodo": ..., "token": ..., "args": {...}}
 
-- Lecturas (crear, leer, editar, borrar): primero confirma el JWT con ClimateDbV2 y luego invoca las
+- Lecturas (crear, leer, editar, borrar): primero confirma el JWT con ClimateDbV2, revisa que el rol
+  pueda hacer esa operación (services/roles.py: borrar = solo SUPERADMIN) y luego invoca las
   4 Lambdas de siempre (ClimateCreate/Read/Update/DeleteReadingV2), que escriben en DynamoDB.
 - Idempotency-Key: confirma el JWT y usa la tabla ClimateIdempotency.
 - Todo lo de MySQL y PostgreSQL se pasa tal cual a ClimateDbV2, que revisa el token y los permisos.
@@ -15,11 +16,13 @@ import base64
 import json
 import os
 
+from services import roles
 from services.rpc_json import a_json, de_json, error_a_json
 
 LECTURAS = {"lectura"}
 IDEMPOTENCIA = {"idem_begin", "idem_finish", "idem_abandon"}
-OPERACIONES = {"read", "create", "update", "delete"}
+# operación sobre DynamoDB -> permiso de la matriz (roles.SESION = cualquier cuenta activa)
+OPERACIONES = {"read": roles.SESION, "create": "agregar", "update": "editar", "delete": "eliminar"}
 MAX_CUERPO = 400_000
 
 
@@ -70,6 +73,9 @@ class Puerta:
                 operacion = args.get("operation")
                 if operacion not in OPERACIONES or not isinstance(args.get("data"), dict):
                     raise ValueError("Operación de lectura inválida.")
+                if not roles.puede(admin, OPERACIONES[operacion]):
+                    return {"error": {"tipo": "ApiError", "status": 403,
+                                      "mensaje": "Your role cannot do this operation on readings."}}
                 return {"ok": a_json(self.lecturas.call(operacion, args["data"]))}
             alcance = str(args.get("scope", ""))
             if not alcance.startswith(f"{admin['user_id']}#"):

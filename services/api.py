@@ -1,9 +1,11 @@
 """REST API for Postman and other external clients.
 
-Public: GET /api/health, GET /api/pronostico (Mexico City forecast) and POST /api/auth/login.
-Everything else needs "Authorization: Bearer <JWT>" of an administrator. POST and PUT need an "Idempotency-Key" header.
-Updates and deletes need the record version (If-Match header or expected_version)
-for optimistic concurrency.
+Public: GET /api/health, GET /api/pronostico (Mexico City forecast), GET /api/registros (hourly readings
+of one day, read only) and POST /api/auth/login.
+Everything else needs "Authorization: Bearer <JWT>" of an ADMIN or SUPERADMIN, and each operation checks the
+permission matrix of services/roles.py (create/update: ADMIN and SUPERADMIN; delete: SUPERADMIN only).
+POST and PUT need an "Idempotency-Key" header. Updates and deletes need the record version (If-Match header or
+expected_version) for optimistic concurrency.
 """
 import re
 import uuid
@@ -12,15 +14,15 @@ from functools import wraps
 from flask import Blueprint, Response, current_app, g, request
 
 from contract import REQUIRED, dumps, load_json, normalize_record
+from services import roles
 from services.catalog import check_record, fill_station, public_catalog, resolve_condition
 from services.endpoints import ApiError
 from services.idempotency import IdempotencyError, check_key, fingerprint
 from services.mysql_store import DatabaseUnavailable
 
 bp = Blueprint("api", __name__, url_prefix="/api")
-PUBLIC = {"api.health", "api.login", "api.pronostico"}
+PUBLIC = {"api.health", "api.login", "api.pronostico", "api.registros"}
 KEYS = ("location_id", "timestamp_utc")
-WRITERS = ("ADMIN",)   # only administrators have accounts
 
 
 def ext(name):
@@ -69,13 +71,14 @@ def http_error(exc):
     return problem(exc.code, "not_found" if exc.code == 404 else "method_not_allowed", exc.description)
 
 
-def roles(*allowed):
+def requiere(accion):
+    """The server decides with the permission matrix; hiding a button is not enough."""
     def decorator(view):
         @wraps(view)
         def wrapper(*args, **kwargs):
-            if g.user["role"] not in allowed:
+            if not roles.puede(g.user, accion):
                 audit("ACCESS_DENIED", "ENDPOINT", request.method + " " + request.path, "DENIED",
-                      reason="role " + g.user["role"])
+                      reason=f"role {g.user.get('role')} cannot {accion}")
                 return problem(403, "forbidden", "Your role cannot use this operation.")
             return view(*args, **kwargs)
         return wrapper
@@ -198,6 +201,24 @@ def pronostico():
     return reply(200, {**datos, "ubicacion": "LOC-CDMX", "aviso": "Statistical forecast by this system"})
 
 
+@bp.get("/registros")
+def registros():
+    """Hourly readings of one Mexico City day, read only and without sign-in (same data as /registros)."""
+    from datetime import date
+    texto = request.args.get("dia", "").strip()
+    try:
+        elegido = date.fromisoformat(texto) if texto else None
+    except ValueError:
+        return problem(400, "invalid_date", "Send dia=YYYY-MM-DD.")
+    try:
+        datos = ext("analytics").lecturas_dia(elegido)
+    except Exception:
+        return problem(503, "records_unavailable", "The records are not available right now.")
+    import json
+    datos = json.loads(json.dumps(datos, default=str))   # fechas -> texto ISO
+    return reply(200, {**datos, "ubicacion": "LOC-CDMX"})
+
+
 @bp.post("/auth/login")
 def login():
     try:
@@ -259,7 +280,7 @@ def get_reading(location_id, timestamp_utc):
 
 
 @bp.post("/readings")
-@roles(*WRITERS)
+@requiere("agregar")
 def create_reading():
     def handler():
         try:
@@ -282,7 +303,7 @@ def create_reading():
 
 
 @bp.put("/readings/<location_id>/<timestamp_utc>")
-@roles(*WRITERS)
+@requiere("editar")
 def update_reading(location_id, timestamp_utc):
     def handler():
         try:
@@ -320,7 +341,7 @@ def update_reading(location_id, timestamp_utc):
 
 
 @bp.delete("/readings/<location_id>/<timestamp_utc>")
-@roles("ADMIN")
+@requiere("eliminar")
 def delete_reading(location_id, timestamp_utc):
     def handler():
         try:
