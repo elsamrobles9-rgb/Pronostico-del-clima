@@ -4,13 +4,13 @@
 {% block content %}
 <h1>Audit log</h1>
 <p class="ad-sub">The last 150 events: sign-ins, failed attempts, reading changes, imports, administrators and passwords.</p>
-<form method="post" action="{{ url_for('admin_audit_rotate') }}" class="ad-tarjeta" data-confirmar="Archive the old events? They will move to the history table and stop showing here.">
-<h2>Archive old events</h2><input type="hidden" name="csrf" value="{{ csrf }}">
+<form method="post" action="{{ url_for('admin_audit_rotate') }}" class="ad-tarjeta ad-archivar" data-confirmar="Archive the old events? They will move to the history table and stop showing here.">
+<h2>{{ icon('history') }} Archive old events</h2><input type="hidden" name="csrf" value="{{ csrf }}">
 <p class="ad-sub">Uses the sp_rotar_auditoria procedure: it moves old events to the history table (nothing is lost) and cleans up expired sessions.</p>
 <div class="ad-inline"><label class="campo">Archive events older than<span class="unidad"><input name="days" type="number" min="0" max="3650" value="30" required><span>days</span></span></label><button class="ad-btn primario" type="submit">{{ icon('history') }} Archive now</button></div>
 <p class="ad-nota">{% if history is not none %}{{ history }} events in the history table.{% else %}The history table is not installed or did not respond.{% endif %}</p></form>
 <div class="ad-tabla-caja ad-mt"><table class="ad-tabla"><thead><tr><th scope="col">When (Mexico City)</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">On</th><th scope="col">Result</th><th scope="col">Reason</th></tr></thead><tbody>
 {% for e in events %}<tr><td class="gris">{{ e.occurred_at_utc|hora_local }}</td><td>{{ e.actor }}</td><td class="fuerte">{{ e.action|accion }}</td><td class="gris">{{ e.entity_key }}</td>
-<td><span class="ad-etiqueta {{ 'ok' if e.outcome == 'SUCCESS' else ('mal' if e.outcome in ('FAILURE','BLOCKED','DENIED') else 'alerta') }}">{{ e.outcome|resultado }}</span></td><td class="gris">{{ e.reason or '' }}</td></tr>
+<td><span class="ad-etiqueta {{ 'ok' if e.outcome == 'SUCCESS' else ('mal' if e.outcome in ('FAILURE','BLOCKED','DENIED') else 'alerta') }}">{{ icon('check') if e.outcome == 'SUCCESS' else (icon('error') if e.outcome in ('FAILURE','BLOCKED','DENIED') else icon('alert')) }} {{ e.outcome|resultado }}</span></td><td class="gris">{{ e.reason or '' }}</td></tr>
 {% else %}<tr><td colspan="6"><div class="ad-vacio">No events yet.</div></td></tr>{% endfor %}</tbody></table></div>
 {% endblock %}

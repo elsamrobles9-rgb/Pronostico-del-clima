@@ -2,12 +2,12 @@
 {% block titulo %}{{ 'Review import' if state == 'preview' else 'Import result' }}{% endblock %}
 {% block migas %}{{ migas([('Home', url_for('inicio')), ('Import', url_for('import_records')), ('Review' if state == 'preview' else 'Result', None)], ('Upload another file', url_for('import_records'))) }}{% endblock %}
 {% block content %}
-{% set con_error = rows|selectattr('error')|list|length %}
+{% set con_error = rows|selectattr('error')|list|length %}{% set n = rows|length %}{% set palabra = 'reading' if n == 1 else 'readings' %}
 <h1>{{ 'Review before saving' if state == 'preview' else 'Import result' }}</h1>
-<p class="ad-sub">{{ rows|length }} rows in the file.</p>
+<p class="ad-sub">{{ n }} {{ 'row' if n == 1 else 'rows' }} in the file.</p>
 {{ pasos(2 if state == 'preview' else 3) }}
 <div class="ad-alertas">
-{% if state == 'preview' and valid %}<div class="ad-alerta success" role="status">{{ icon('check') }}<span class="cuerpo"><span class="titulo">Everything looks good</span>All {{ rows|length }} rows passed the check. When you confirm, each reading is saved separately: if one fails, the others are still saved and we will tell you which one failed.</span></div>
+{% if state == 'preview' and valid %}<div class="ad-alerta success" role="status">{{ icon('check') }}<span class="cuerpo"><span class="titulo">Everything looks good</span>{{ 'The only row' if n == 1 else 'All ' ~ n ~ ' rows' }} passed the check. When you confirm, each reading is saved separately: if one fails, the others are still saved and we will tell you which one failed.</span></div>
 {% elif state == 'preview' %}<div class="ad-alerta error" role="alert">{{ icon('error') }}<span class="cuerpo"><span class="titulo">Nothing was saved</span>{{ con_error }} of {{ rows|length }} rows have problems (marked below). Fix them in your file and upload it again.</span></div>
 {% elif state == 'processing' %}<div class="ad-alerta warning" role="alert">{{ icon('alert') }}<span class="cuerpo"><span class="titulo">The import was interrupted or is still running</span>Reload this page to see the result. Do not upload the file again until you check which rows are still pending.</span></div>
 {% else %}<div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Import finished</span>Check the status of each row. Rows marked "Not saved" explain why.</span></div>{% endif %}
@@ -15,9 +15,9 @@
 <div class="ad-chips"><span class="ad-etiqueta ok">{{ rows|length - con_error }} without problems</span>{% if con_error %}<span class="ad-etiqueta mal">{{ con_error }} with a problem</span>{% endif %}</div>
 <div class="ad-tabla-caja"><table class="ad-tabla"><thead><tr><th scope="col">Row</th><th scope="col">Date and time (Mexico City)</th><th scope="col">Location</th><th scope="col">UV index</th><th scope="col">Dew point</th><th scope="col">Status</th></tr></thead><tbody>
 {% for row in rows %}<tr class="{{ 'problema' if row.error }}"><td>{{ row.number }}</td><td>{{ row.record.get('timestamp_utc')|hora_local if row.record.get('timestamp_utc') else '—' }}</td><td>{{ row.record.get('location_id','—') }}</td><td>{{ row.record.get('uv_index','—') }}</td><td>{{ row.record.get('dew_point_c','—') }}</td>
-<td>{% if row.error %}<span class="ad-etiqueta mal">{{ row.error|explicar }}</span>{% elif row.result %}<span class="ad-etiqueta {{ 'ok' if row.result == 'Imported' else 'alerta' }}">{{ row.result|resultado_fila }}</span>{% elif state == 'preview' %}<span class="ad-etiqueta ok">Ready</span>{% else %}<span class="ad-etiqueta alerta">Not saved</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
-{% if state == 'preview' and valid %}<form method="post" action="{{ url_for('import_confirm',job=job) }}" data-confirmar="Save {{ rows|length }} readings? This writes to the databases."><input type="hidden" name="csrf" value="{{ csrf }}">
-<div class="ad-barra ad-mt"><a class="ad-btn" href="{{ url_for('import_records') }}">{{ icon('back') }} Previous step</a><button class="ad-btn primario" type="submit">{{ icon('check') }} Save {{ rows|length }} readings{{ ' (demo)' if mode == 'demo' else '' }}</button></div></form>
+<td>{% if row.error %}<span class="ad-etiqueta mal">{{ row.error|explicar }}</span>{% elif row.result %}<span class="ad-etiqueta {{ 'ok' if row.result == 'Imported' else 'alerta' }}">{{ row.result|resultado_fila }}</span>{% elif state == 'preview' %}<span class="ad-etiqueta ok">{{ icon('check') }} Ready</span>{% else %}<span class="ad-etiqueta alerta">Not saved</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+{% if state == 'preview' and valid %}<form method="post" action="{{ url_for('import_confirm',job=job) }}" data-confirmar="Save {{ n }} {{ palabra }}? This writes to the databases."><input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="ad-barra ad-mt"><a class="ad-btn" href="{{ url_for('import_records') }}">{{ icon('back') }} Previous step</a><button class="ad-btn primario" type="submit">{{ icon('check') }} Save {{ n }} {{ palabra }}{{ ' (demo)' if mode == 'demo' else '' }}</button></div></form>
 <p class="ad-nota">Do not close this page while they are being saved.</p>
 {% else %}<div class="ad-barra ad-mt"><a class="ad-btn" href="{{ url_for('import_records') }}">{{ icon('upload') }} Upload another file</a><a class="ad-btn primario" href="{{ url_for('index') }}">See readings</a></div>{% endif %}
 {% endblock %}

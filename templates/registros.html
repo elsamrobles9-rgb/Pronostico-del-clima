@@ -5,36 +5,44 @@
 <symbol id="next" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
 <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></symbol>
 <symbol id="table" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M10 5v14"/></symbol>
-<symbol id="error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
 <symbol id="calendar" viewBox="0 0 24 24"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
 </svg>
 {% macro valor(x, unidad='') %}{{ '—' if x is none else (x ~ unidad) }}{% endmacro %}
 <header class="ad-header"><div class="ad-header-in">
-<a class="ad-brand" href="{{ url_for('public_home') }}">◆ CDMX Weather</a>
+<a class="ad-brand" href="{{ url_for('public_home') }}"><svg class="marca" viewBox="0 0 64 64" aria-hidden="true"><g class="wx-sol"><circle cx="32" cy="32" r="13"/><path class="wx-rayos" d="M32 6v8M32 50v8M6 32h8M50 32h8M13.6 13.6l5.7 5.7M44.7 44.7l5.7 5.7M13.6 50.4l5.7-5.7M44.7 19.3l5.7-5.7"/></g></svg>CDMX Weather</a>
 <span class="ad-pill">Mexico City</span>
-<a class="ad-btn pub-acceso" href="{{ url_for('public_home') }}">{{ icon('back') }} Forecast</a>
+<nav class="pub-nav" aria-label="Sections"><a href="{{ url_for('public_home') }}#dias">7-day forecast</a><a href="{{ url_for('public_home') }}#horas">Hourly</a><a href="{{ url_for('registros_publicos') }}" class="activo" aria-current="page">Past readings</a></nav>
 <a class="ad-btn {{ 'primario' if current_user else '' }} pub-acceso" href="{{ url_for('inicio') if current_user else url_for('login') }}">{{ icon('table') if current_user else icon('key') }} {{ 'Admin panel' if current_user else 'Admin sign-in' }}</a>
 </div></header>
 <main class="pub">
-<section class="card">
-<h1>Hourly records</h1>
-<p class="muted">Weather readings stored for Mexico City, one row per reading, in Mexico City time. This page is read only.</p>
-<form class="ad-filtros" method="get" action="{{ url_for('registros_publicos') }}">
+<section class="reg-cabeza" aria-labelledby="t-reg">
+<div>
+<span class="pub-eyebrow">Past readings · read only</span>
+<h1 id="t-reg">Hourly records</h1>
+<p class="muted">Weather readings stored for Mexico City, one row per reading, in Mexico City time.{% if primero and ultimo %} Available from {{ primero|short_date }}, {{ primero.year }} to {{ ultimo|short_date }}, {{ ultimo.year }}.{% endif %}</p>
+</div>
+<form class="reg-buscar" method="get" action="{{ url_for('registros_publicos') }}">
 <label class="campo">Day<input type="date" name="dia" value="{{ dia.isoformat() if dia else '' }}"{% if primero %} min="{{ primero.isoformat() }}"{% endif %}{% if ultimo %} max="{{ ultimo.isoformat() }}"{% endif %} required></label>
 <button class="ad-btn" type="submit">{{ icon('calendar') }} Show day</button>
 </form>
-<nav class="ad-acciones" aria-label="Days">
-{% if anterior %}<a class="ad-btn" href="{{ url_for('registros_publicos', dia=anterior.isoformat()) }}">{{ icon('back') }} Previous day</a>{% endif %}
-{% if siguiente %}<a class="ad-btn" href="{{ url_for('registros_publicos', dia=siguiente.isoformat()) }}">Next day {{ icon('next') }}</a>{% endif %}
+</section>
+{% if problem %}<div class="ad-alerta error reg-aviso" role="alert">{{ icon('info') }}<span class="cuerpo"><span class="titulo">The records could not be shown</span>{{ problem }}</span></div>{% endif %}
+<section class="pub-seccion reg-dia" aria-labelledby="t-dia">
+<div class="pub-titulo">
+<h2 id="t-dia">{{ dia|long_date if dia else 'No day selected' }}</h2>
+<nav class="reg-pasar" aria-label="Days">
+{% if anterior %}<a class="ad-btn chico" href="{{ url_for('registros_publicos', dia=anterior.isoformat()) }}">{{ icon('back') }} Previous day</a>{% endif %}
+{% if siguiente %}<a class="ad-btn chico" href="{{ url_for('registros_publicos', dia=siguiente.isoformat()) }}">Next day {{ icon('next') }}</a>{% endif %}
 </nav>
-{% if primero and ultimo %}<p class="muted">Available from {{ primero|short_date }}, {{ primero.year }} to {{ ultimo|short_date }}, {{ ultimo.year }}.</p>{% endif %}
-</section>
-{% if problem %}<div class="ad-alerta error" role="alert">{{ icon('error') }}<span class="cuerpo"><span class="titulo">The records could not be shown</span>{{ problem }}</span></div>{% endif %}
-<section class="horas card">
-<h2>{{ dia|long_date if dia else 'No day selected' }}</h2>
-<div class="table-wrap"><table><thead><tr><th scope="col">Time</th><th scope="col"><span class="ad-sr">Icon</span></th><th scope="col">Temp.</th><th scope="col">Feels like</th><th scope="col">Condition</th><th scope="col">Humidity</th><th scope="col">Rain</th><th scope="col">Wind</th><th scope="col">UV</th><th scope="col">Clouds</th></tr></thead><tbody>
-{% for f in filas %}<tr><td class="hora">{{ f.hora }}</td><td>{{ wx(f.icono, f.dia_luz, 'wx wx-sm') }}</td><td class="t">{{ valor(f.temperatura, '°') }}</td><td>{{ valor(f.sensacion, '°') }}</td><td>{{ f.texto|en }}</td><td>{{ valor(f.humedad, ' %') }}</td><td>{{ valor(f.lluvia, ' mm') }}</td><td>{{ valor(f.viento, ' km/h') }} {{ f.rumbo }}</td><td>{{ valor(f.uv) }}</td><td>{{ valor(f.nubes, ' %') }}</td></tr>
+</div>
+<div class="table-wrap"><table><thead><tr><th scope="col">Time</th><th scope="col"><span class="ad-sr">Sky</span></th><th scope="col">Temp.</th><th scope="col">Feels like</th><th scope="col">Condition</th><th scope="col">Humidity</th><th scope="col">Rain</th><th scope="col">Wind</th><th scope="col">UV</th><th scope="col">Clouds</th></tr></thead><tbody>
+{% for f in filas %}<tr><td class="hora">{{ f.hora }}</td><td>{{ wx(f.icono, f.dia_luz, 'wx wx-sm') }}</td><td class="t">{{ valor(f.temperatura, '°') }}</td><td>{{ valor(f.sensacion, '°') }}</td><td>{{ f.texto|en }}</td><td>{{ valor(f.humedad, ' %') }}</td><td>{{ valor(f.lluvia, ' mm') }}</td><td>{{ valor(f.viento, ' km/h') }} {{ f.rumbo or '' }}</td><td>{{ valor(f.uv) }}</td><td>{{ valor(f.nubes, ' %') }}</td></tr>
 {% else %}<tr><td colspan="10" class="empty">There are no readings for this day.</td></tr>{% endfor %}</tbody></table></div>
-<p class="muted">A reading deleted by the super administrator disappears from this page after the next data load.</p>
+<p class="ad-nota">A reading deleted by the super administrator disappears from this page after the next data load.</p>
 </section>
-</main><footer class="ad-pie">CDMX Weather · Data: Open-Meteo.com (CC BY 4.0) and readings entered by the administrators</footer></body></html>
+</main>
+<footer class="pub-pie"><div class="pub-pie-in">
+<p class="pub-marca" aria-hidden="true">CDMX Weather</p>
+<div class="pub-pie-linea"><p>CDMX Weather · Data: Open-Meteo.com (CC BY 4.0) and readings entered by the administrators</p><nav aria-label="Footer"><a href="{{ url_for('public_home') }}">Forecast</a><a href="{{ url_for('login') }}">Admin sign-in</a></nav></div>
+</div></footer></body></html>
