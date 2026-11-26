@@ -1,15 +1,21 @@
-{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = '' %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = 'perfil' %}
 {% block titulo %}My profile{% endblock %}
 {% block migas %}{{ migas([('Home', url_for('inicio')), ('My profile', None)], ('Back to home', url_for('inicio'))) }}{% endblock %}
 {% block content %}
 <h1>My profile</h1>
 <p class="ad-sub">Only you can see this page. You can change your display name and your password, never your role.</p>
-<section class="ad-tarjeta"><h2>Account</h2>
+<div class="perfil-rejilla">
+<section class="ad-tarjeta perfil-cuenta" aria-labelledby="t-cuenta">
+<span class="perfil-avatar" aria-hidden="true">{{ (perfil.display_name or perfil.username)[:2]|upper }}</span>
+<h2 id="t-cuenta">{{ perfil.display_name or perfil.username }}</h2>
+<span class="ad-rol{{ ' super' if perfil.role == 'SUPERADMIN' }}">{{ rol_texto or perfil.role }}</span>
 <dl><dt>{{ 'Email' if users_store.startswith('mysql') else 'Username' }}</dt><dd>{{ perfil.username }}</dd>
-<dt>Role</dt><dd><span class="ad-etiqueta">{{ rol_texto or perfil.role }}</span></dd>
+<dt>Role</dt><dd>{{ rol_texto or perfil.role }}</dd>
 {% if perfil.created_at_utc %}<dt>Account created</dt><dd>{{ perfil.created_at_utc|hora_local }} (Mexico City time)</dd>{% endif %}</dl>
 </section>
-<form method="post" class="ad-tarjeta ad-mt"><h2>Display name</h2><input type="hidden" name="csrf" value="{{ csrf }}">
-<div class="ad-campos"><label class="campo">Display name<input name="display_name" maxlength="120" value="{{ perfil.display_name or '' }}" required><span class="ayuda">1 to 120 characters. It is shown in the panel.</span></label></div>
+<form method="post" class="ad-tarjeta"><h2>{{ icon('edit') }} Display name</h2><input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="ad-nota ad-nota-arriba">It is shown in the panel header and in the audit log.</p>
+<div class="ad-campos"><label class="campo">Display name<input name="display_name" maxlength="120" value="{{ perfil.display_name or '' }}" required><span class="ayuda">1 to 120 characters.</span></label></div>
 <div class="ad-barra ad-mt"><a class="ad-btn" href="{{ url_for('account_password') }}">{{ icon('key') }} Change my password</a><button class="ad-btn primario" type="submit">{{ icon('check') }} Save name</button></div></form>
+</div>
 {% endblock %}

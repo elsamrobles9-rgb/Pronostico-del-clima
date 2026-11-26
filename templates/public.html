@@ -10,7 +10,7 @@
 <a class="ad-brand" href="{{ url_for('public_home') }}"><svg class="marca" viewBox="0 0 64 64" aria-hidden="true"><g class="wx-sol"><circle cx="32" cy="32" r="13"/><path class="wx-rayos" d="M32 6v8M32 50v8M6 32h8M50 32h8M13.6 13.6l5.7 5.7M44.7 44.7l5.7 5.7M13.6 50.4l5.7-5.7M44.7 19.3l5.7-5.7"/></g></svg>CDMX Weather</a>
 <span class="ad-pill">Mexico City</span>
 {% if mode == 'demo' %}<span class="ad-pill modo">{{ 'Offline · real data' if datos_reales else 'Demo mode' }}</span>{% endif %}
-<nav class="pub-nav" aria-label="Forecast sections">{% if not problem %}<a href="#dias">7-day forecast</a><a href="#horas">Hourly</a>{% endif %}<a href="/registros">Past readings</a></nav>
+<nav class="pub-nav" aria-label="Forecast sections">{% if not problem %}<a href="#dias">7-day forecast</a><a href="#horas">Hourly</a>{% endif %}<a href="{{ url_for('registros_publicos') }}">Past readings</a></nav>
 <a class="ad-btn {{ 'primario' if current_user else '' }} pub-acceso" href="{{ url_for('inicio') if current_user else url_for('login') }}">{{ icon('table') if current_user else icon('key') }} {{ 'Admin panel' if current_user else 'Admin sign-in' }}</a>
 </div></header>
 <main class="pub">
@@ -59,5 +59,5 @@
 </main>
 <footer class="pub-pie"><div class="pub-pie-in">
 <p class="pub-marca" aria-hidden="true">CDMX Weather</p>
-<div class="pub-pie-linea"><p>CDMX Weather · Data: Open-Meteo.com (CC BY 4.0) · Statistical forecast by this system, not official</p><nav aria-label="Footer"><a href="/registros">Past readings</a><a href="{{ url_for('login') }}">Admin sign-in</a></nav></div>
+<div class="pub-pie-linea"><p>CDMX Weather · Data: Open-Meteo.com (CC BY 4.0) · Statistical forecast by this system, not official</p><nav aria-label="Footer"><a href="{{ url_for('registros_publicos') }}">Past readings</a><a href="{{ url_for('login') }}">Admin sign-in</a></nav></div>
 </div></footer></body></html>

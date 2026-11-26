@@ -42,7 +42,7 @@
 {% if puede is not defined or puede.importar %}<a href="{{ url_for('import_records') }}"{% if seccion == 'importar' %} class="activo" aria-current="page"{% endif %}>Import</a>{% endif %}
 {% if puede is not defined or puede.gestionar_admins %}<a href="{{ url_for('admin_users') }}"{% if seccion == 'usuarios' %} class="activo" aria-current="page"{% endif %}>Administrators</a>{% endif %}
 {% if puede is not defined or puede.ver_bitacora %}<a href="{{ url_for('admin_audit') }}"{% if seccion == 'auditoria' %} class="activo" aria-current="page"{% endif %}>Audit log</a>{% endif %}
-{% if puede is not defined or puede.mi_perfil %}<a href="/account/profile"{% if seccion == 'perfil' %} class="activo" aria-current="page"{% endif %}>My profile</a>{% endif %}
+{% if puede is not defined or puede.mi_perfil %}<a href="{{ url_for('perfil') }}"{% if seccion == 'perfil' %} class="activo" aria-current="page"{% endif %}>My profile</a>{% endif %}
 </nav>{% endif %}
 </header>
 <main class="{% block main_clase %}ad-main{% endblock %}">
