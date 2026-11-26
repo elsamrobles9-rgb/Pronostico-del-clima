@@ -18,7 +18,8 @@ class PortalTests(unittest.TestCase):
         self.app.testing = True
         self.web = self.app.test_client()
         store=self.app.extensions['access_store']
-        store.add_user('tester','test-password-123','ADMIN')
+        # Estas pruebas incluyen eliminar, que es solo del SUPERADMIN (el ADMIN se prueba en test_roles.py).
+        store.add_user('tester','test-password-123','SUPERADMIN')
         with self.web.session_transaction() as session:
             session['sid']=store.login('tester','test-password-123')
         self.keys = {k: sample()[k] for k in ("location_id", "timestamp_utc")}

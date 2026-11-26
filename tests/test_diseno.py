@@ -22,6 +22,9 @@ class DisenoTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.addCleanup(self.temp.cleanup)
         self.store = mysql_double(self.temp.name + "/mysql.db", self)
         self.store.save_admin("admin@example.com", "Admin", PASSWORD)
+        # Estas pruebas recorren todas las pantallas (borrar, cuentas, bitácora): la cuenta es SUPERADMIN.
+        # Lo que el ADMIN no puede ver se prueba en test_roles.py.
+        self.store.set_role("admin@example.com", "SUPERADMIN")
         self.backend = DemoClient(seed=False)
         self.app = create_app(self.backend, "lambda", auth_path=self.temp.name + "/local.sqlite3",
                               auth_store=self.store, analytics=analytics or RecordingAnalytics())

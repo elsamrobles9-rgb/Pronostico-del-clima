@@ -19,7 +19,7 @@ from services.idempotency import MemoryIdempotency
 from services.remoto import (ApiRemota, RemoteAnalytics, RemoteClient, RemoteIdempotency, RemoteStore,
                              SesionVencida)
 from services.rpc_json import codificar, decodificar
-from test_aws_features import PASSWORD, ApiTests, RecordingAnalytics, WebTests, mysql_double
+from test_aws_features import PASSWORD, ApiTests, RecordingAnalytics, WebTests, crear_super, mysql_double
 
 
 def pila_remota(store, lecturas, analytics, idempotencia=None):
@@ -54,6 +54,7 @@ class RemoteApiTests(ApiTests):
         self.store = mysql_double(self.path, self)
         for email in ("admin@example.com", "second@example.com"):
             self.store.save_admin(email, None, PASSWORD)
+        crear_super(self.store)
         self.backend = DemoClient(seed=False)
         self.analytics = RecordingAnalytics()
         partes, self.api, _ = pila_remota(self.store, self.backend, self.analytics)
@@ -70,6 +71,7 @@ class RemoteWebTests(WebTests):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.addCleanup(self.temp.cleanup)
         self.store = mysql_double(self.temp.name + "/mysql.db", self)
         self.store.save_admin("admin@example.com", "Admin", PASSWORD)
+        crear_super(self.store)
         self.backend = DemoClient(seed=False)
         self.analytics = RecordingAnalytics()
         partes, self.api, _ = pila_remota(self.store, self.backend, self.analytics)
@@ -121,7 +123,12 @@ class SeguridadOpcionATests(unittest.TestCase):
     def test_token_falso_o_revocado(self):
         with self.assertRaises(SesionVencida):
             self.api.llamar("list_users", "a.b.c")
+        # La lista de cuentas es del SUPERADMIN: un ADMIN con token válido recibe "Permission denied".
         token = self.api.llamar("login", email="admin@example.com", password=PASSWORD)
+        with self.assertRaises(ValueError):
+            self.api.llamar("list_users", token)
+        self.store.set_role("otro@example.com", "SUPERADMIN")
+        token = self.api.llamar("login", email="otro@example.com", password=PASSWORD)
         self.assertEqual(len(self.api.llamar("list_users", token)), 2)
         self.api.llamar("logout", token=token)
         with self.assertRaises(SesionVencida):

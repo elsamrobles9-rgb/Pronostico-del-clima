@@ -4,12 +4,15 @@ Vive dentro de la red (VPC) de las RDS, así que las bases no necesitan estar ab
 No la llama nadie de fuera: solo la Lambda ClimateApiV2, con lambda:InvokeFunction.
 
 Recibe {"metodo": ..., "token": ..., "args": {...}} y responde {"ok": ...} o {"error": {...}}.
-Los métodos de administración exigen un JWT de ADMIN con sesión vigente en MySQL; el actor que se
-guarda en la auditoría sale SIEMPRE del token, nunca de lo que mande el portal.
+Los métodos de administración exigen un JWT con sesión vigente en MySQL y el permiso que pide la
+matriz de services/roles.py (por ejemplo, gestionar administradores = solo SUPERADMIN). El actor que
+se guarda en la auditoría sale SIEMPRE del token, nunca de lo que mande el portal. Así, aunque
+alguien llame a API Gateway directamente con su token, no puede hacer más de lo que su rol permite.
 """
 import os
 import uuid
 
+from services import roles
 from services.rpc_json import a_json, de_json, error_a_json
 
 
@@ -17,7 +20,19 @@ class NoAutorizado(Exception):
     pass
 
 
-PUBLICOS = {"estado", "login", "user", "logout", "catalog", "pagina"}
+PUBLICOS = {"estado", "login", "user", "logout", "catalog", "pagina", "lecturas_dia"}
+
+# Métodos con sesión -> permiso que exigen (roles.SESION = cualquier cuenta activa).
+# Un método que no esté aquí ni en PUBLICOS se niega.
+PERMISOS = {
+    "save_admin": "gestionar_admins", "disable": "gestionar_admins", "enable": "gestionar_admins",
+    "list_users": "gestionar_admins", "count_admins": "gestionar_admins",
+    "rotate_audit": "ver_bitacora", "history_count": "ver_bitacora",
+    "audit_log": roles.SESION,                   # el ADMIN recibe solo sus propios eventos
+    "audit": roles.SESION, "autorizar": roles.SESION,
+    "change_own_password": "mi_perfil", "my_profile": "mi_perfil", "update_own_profile": "mi_perfil",
+    "upsert": "editar",
+}
 
 
 class ServicioDatos:
@@ -40,6 +55,8 @@ class ServicioDatos:
                 admin = self.store.user(str(peticion.get("token") or ""))
                 if not admin:
                     raise NoAutorizado("Tu sesión ya no es válida. Vuelve a iniciar sesión.")
+                if not roles.puede(admin, PERMISOS.get(metodo, roles.DESCONOCIDA)):
+                    raise ValueError("Permission denied: your role cannot use this operation.")
             return {"ok": a_json(funcion(admin, **args))}
         except TypeError as exc:
             print("ERROR TypeError", str(exc)[:300])
@@ -83,9 +100,15 @@ class ServicioDatos:
     def m_pagina(self, admin, dia=None):
         return self.analytics.pagina(dia)
 
-    # ------------------------------------------------------------------ administración (token ADMIN)
-    def m_save_admin(self, admin, email, display_name, password, request_id=None):
-        return self.store.save_admin(email, display_name, password, actor=admin, request_id=request_id)
+    def m_lecturas_dia(self, admin, dia=None):
+        """Registros públicos de un día (solo lectura) para el visitante."""
+        return self.analytics.lecturas_dia(dia)
+
+    # ------------------------------------------------------------------ con sesión (permiso según PERMISOS)
+    def m_save_admin(self, admin, email, display_name, password, request_id=None, mode=None):
+        if mode not in (None, "create", "password"):
+            raise ValueError("Unknown form action.")
+        return self.store.save_admin(email, display_name, password, actor=admin, request_id=request_id, mode=mode)
 
     def m_change_own_password(self, admin, current, new):
         return self.store.change_own_password(admin, current, new)
@@ -96,6 +119,8 @@ class ServicioDatos:
         return self.store.disable(email, actor=admin)
 
     def m_enable(self, admin, email):
+        if email == admin["username"]:
+            raise ValueError("You cannot change your own account status.")
         return self.store.enable(email, actor=admin)
 
     def m_list_users(self, admin):
@@ -104,12 +129,20 @@ class ServicioDatos:
     def m_count_admins(self, admin):
         return self.store.count_admins()
 
+    def m_my_profile(self, admin):
+        return self.store.profile(admin)
+
+    def m_update_own_profile(self, admin, display_name):
+        return self.store.update_own_profile(admin, display_name)
+
     def m_audit(self, admin, action, entity_type, entity_key, outcome, before=None, after=None, reason=None,
                 request_id=None):
         return self.store.audit(admin, action, entity_type, entity_key, outcome, before, after, reason, request_id)
 
     def m_audit_log(self, admin, limit=100):
-        return self.store.audit_log(min(int(limit), 500))
+        # Privacidad: el SUPERADMIN ve toda la bitácora; un ADMIN, solo sus propios eventos.
+        alcance = None if roles.puede(admin, "ver_bitacora") else admin
+        return self.store.audit_log(min(int(limit), 500), actor=alcance)
 
     def m_rotate_audit(self, admin, days, request_id=None):
         return self.store.rotate_audit(days, admin, request_id or uuid.uuid4().hex)
