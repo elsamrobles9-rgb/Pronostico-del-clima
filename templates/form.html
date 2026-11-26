@@ -1,33 +1,42 @@
-{% extends 'base.html' %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = 'lecturas' %}
+{% block titulo %}{{ 'Edit reading' if editing else 'New reading' }}{% endblock %}
+{% block migas %}{{ migas([('Home', url_for('inicio')), ('Readings', url_for('index')), ('Edit ' ~ (data.get('timestamp_utc')|hora_local) if editing else 'New reading', None)], ('Back to readings', url_for('index'))) }}{% endblock %}
+{% macro campo(key, editing) %}{% set e = etiquetas.get(key, {}) %}
+<label class="campo">{{ e.get('nombre', key) }}
+{% if key == 'wind_direction' %}<select id="wind_direction" name="wind_direction" required>{% for r in rumbos %}<option value="{{ r }}" {% if (data.get(key) or 'N') == r %}selected{% endif %}>{{ r }}</option>{% endfor %}{% if data.get(key) and data.get(key) not in rumbos %}<option value="{{ data.get(key) }}" selected>{{ data.get(key) }}</option>{% endif %}</select>
+{% else %}<span class="unidad"><input id="{{ key }}" name="{{ key }}" type="{{ e.get('tipo', 'text') }}" value="{{ data.get(key, '') }}" required {% if e.get('tipo') == 'number' %}step="{{ '1' if key == 'precipitation_period_minutes' else 'any' }}"{% endif %} {% if editing and key in ('location_id','timestamp_utc','station_id') %}readonly{% endif %}>{% if e.get('unidad') %}<span>{{ e.unidad }}</span>{% endif %}</span>{% endif %}
+{% if e.get('ayuda') %}<span class="ayuda">{{ e.ayuda }}</span>{% endif %}</label>{% endmacro %}
 {% block content %}
-<a class="back" href="{{ url_for('index') }}">← Back to records</a>
-<h1>{{ 'Edit record' if editing else 'Add record' }}</h1>
-<p class="muted">{% if editing %}Location, station and timestamp cannot be changed. Reopen the record if another user has updated it.{% else %}The observation time defaults to now. For historical observations, change the date, time and UTC offset. Record IDs are generated automatically.{% endif %}</p>
-<form method="post" class="card" id="record-form">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  {% if editing %}<input type="hidden" name="snapshot" value="{{ snapshot }}">{% endif %}
-  {% if not editing %}
-  <div class="form-grid">
-    <label>Observation date and time<input id="local-time" type="datetime-local" step="60" required></label>
-    <label>UTC offset<input id="utc-offset" type="text" placeholder="-06:00" pattern="[+-][0-9]{2}:[0-9]{2}" required></label>
-  </div>
-  <p class="muted">The offset initially follows your device. For a different location or a repeated daylight-saving hour, enter that observation's actual offset. Stored time: <output id="utc-preview">—</output></p>
-  <noscript><p>Enable JavaScript to use the date and time selector.</p></noscript>
-  {% endif %}
-  <div class="form-grid">
-  {% for key,label,kind in fields %}
-    {% if key == 'timestamp_utc' and not editing %}
-      <input id="timestamp_utc" name="timestamp_utc" type="hidden" value="{{ data.get(key, '') }}">
-    {% else %}
-    <label>{{ label }}
-      <input id="{{ key }}" name="{{ key }}" type="{{ kind }}" value="{{ data.get(key, '') }}" required
-       {% if kind == 'number' %}step="{{ '1' if key == 'precipitation_period_minutes' else 'any' }}"{% endif %}
-       {% if editing and key in ('location_id','timestamp_utc','station_id') %}readonly{% endif %}>
-    </label>
-    {% endif %}
-  {% endfor %}
-  </div>
-  <div class="form-actions"><a class="button light" href="{{ url_for('index') }}">Cancel</a><button class="button primary" type="submit">{{ 'Save changes' if editing else 'Add record' }}</button></div>
+<h1>{{ 'Edit reading' if editing else 'New reading' }}</h1>
+<p class="ad-sub">{% if editing %}{{ data.get('timestamp_utc')|hora_local }} (Mexico City time) · version {{ data.get('version', '—') }}{% else %}Only Mexico City readings are accepted. The identifier is created automatically.{% endif %}</p>
+{% if editing %}<div class="ad-alertas"><div class="ad-alerta info" role="status">{{ icon('info') }}<span class="cuerpo"><span class="titulo">Before you edit</span>The location, station and time cannot be changed. If someone else saves this reading before you, you will be told and no change will be lost. This form expires in 30 minutes.</span></div></div>{% endif %}
+<form method="post" class="ad-form" id="record-form">
+<input type="hidden" name="csrf" value="{{ csrf }}">{% if editing %}<input type="hidden" name="snapshot" value="{{ snapshot }}">{% endif %}
+<section class="ad-tarjeta"><h2>Where and when</h2><div class="ad-campos">
+{% if not editing %}
+<label class="campo">Observation date and time<input id="local-time" type="datetime-local" step="60" required><span class="ayuda">Your device's time.</span></label>
+<label class="campo">UTC offset<input id="utc-offset" type="text" placeholder="-06:00" pattern="[+-][0-9]{2}:[0-9]{2}" required><span class="ayuda">Mexico City is −06:00. It will be saved as: <output id="utc-preview">—</output></span></label>
+<input id="timestamp_utc" name="timestamp_utc" type="hidden" value="{{ data.get('timestamp_utc', '') }}">
+<label class="campo">Location<input id="location_id" name="location_id" type="text" value="{{ data.get('location_id') or 'LOC-CDMX' }}" readonly><span class="ayuda">Fixed: Mexico City.</span></label>
+<label class="campo">Station<input id="station_id" name="station_id" type="text" value="{{ data.get('station_id') or 'ST-CDMX-OM' }}" readonly></label>
+<noscript><div class="ad-alerta warning">Turn on JavaScript to pick the date and time.</div></noscript>
+{% else %}{{ campo('location_id', True) }}{{ campo('station_id', True) }}{{ campo('timestamp_utc', True) }}{% endif %}
+{% if catalog %}<label class="campo">Source<select id="source_id" name="source_id" required>
+{% for src in catalog.sources %}<option value="{{ src.source_id }}" {% if data.get('source_id') == src.source_id %}selected{% endif %}>{{ src.name }} ({{ src.source_id }})</option>{% endfor %}
+{% if data.get('source_id') and data.get('source_id') not in catalog.source_ids %}<option value="{{ data.get('source_id') }}" selected>{{ data.get('source_id') }} (not in the catalog)</option>{% endif %}
+</select></label>{% else %}{{ campo('source_id', editing) }}{% endif %}
+</div></section>
+<section class="ad-tarjeta"><h2>Temperature and humidity</h2><div class="ad-campos">{% for k in ('temperature_c','feels_like_c','humidity_pct','dew_point_c') %}{{ campo(k, editing) }}{% endfor %}</div></section>
+<section class="ad-tarjeta"><h2>Wind, rain and sky</h2><div class="ad-campos">{% for k in ('wind_speed_kmh','wind_direction','precipitation_mm','precipitation_period_minutes','cloud_cover_pct','pressure_hpa','visibility_km','uv_index') %}{{ campo(k, editing) }}{% endfor %}
+{% if catalog %}<label class="campo">Condition<select id="condition_id" name="condition_id" required>
+<option value="{{ auto }}" {% if data.get('condition_id') == auto %}selected{% endif %}>Calculate automatically</option>
+{% for cond in catalog.conditions %}<option value="{{ cond.condition_id }}" {% if data.get('condition_id') == cond.condition_id %}selected{% endif %}>{{ cond.condition_id|condicion }}</option>{% endfor %}
+{% if data.get('condition_id') and data.get('condition_id') != auto and data.get('condition_id') not in catalog.condition_ids %}<option value="{{ data.get('condition_id') }}" selected>{{ data.get('condition_id') }} (not in the catalog)</option>{% endif %}
+</select><span class="ayuda">"Automatically" works it out from rain, cloud cover and visibility.</span></label>{% else %}{{ campo('condition_id', editing) }}{% endif %}
+</div></section>
+<div class="ad-barra">
+{% if editing %}<a class="ad-btn suave-peligro" href="{{ url_for('delete', location_id=data.location_id, timestamp_utc=data.timestamp_utc) }}">{{ icon('delete') }} Delete reading</a>{% else %}<span></span>{% endif %}
+<div class="ad-acciones"><a class="ad-btn" href="{{ url_for('index') }}">Cancel</a><button class="ad-btn primario" type="submit">{{ icon('check') }} {{ 'Save changes' if editing else 'Save reading' }}</button></div></div>
 </form>
 {% if not editing %}<script src="{{ url_for('static', filename='form.js') }}" defer></script>{% endif %}
 {% endblock %}

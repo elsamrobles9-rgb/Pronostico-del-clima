@@ -1,8 +1,9 @@
 -- =====================================================================================
--- AWS Clima V2 · 10 Stored Procedures de la capa analítica (PostgreSQL, climate_analytics)
--- Transformación, limpieza, agregación, evaluación de predicciones y métricas.
+-- AWS Clima V2 · 13 Stored Procedures de la capa analítica (PostgreSQL, climate_analytics)
+-- Transformación, limpieza, agregación (diaria y por hora), promedio móvil,
+-- evaluación de predicciones y métricas.
 --
--- Cómo instalar: DBeaver -> conexión PostgreSQL -> abrir este archivo -> Alt+X (ejecutar script).
+-- Cómo instalar: .\.venv\Scripts\python.exe etl\instalar_sp.py  (o DBeaver -> PostgreSQL -> Alt+X).
 -- Se puede ejecutar más de una vez: usa CREATE OR REPLACE e IF NOT EXISTS.
 -- Requiere PostgreSQL 13 o superior (gen_random_uuid).
 -- =====================================================================================
@@ -453,6 +454,7 @@ BEGIN
         FROM climate_analytics.prediction_evaluations e
         JOIN climate_analytics.predictions p ON p.prediction_id = e.prediction_id
         WHERE p.forecast_run_id = p_forecast_run_id
+          AND e.granularity = 'DAY'   -- las métricas son diarias; las evaluaciones HOUR no se mezclan
         ORDER BY e.prediction_id, e.actual_version DESC
     ), errores AS (
         SELECT u.training_run_id, u.series_id, u.starts_at_utc, u.ends_at_utc, v.variable, v.unidad, v.error
@@ -481,7 +483,182 @@ BEGIN
     GET DIAGNOSTICS p_filas = ROW_COUNT;
 END $$;
 
--- Verificación: deben aparecer 10 procedimientos (PROCEDURE) y 2 funciones auxiliares.
+-- =====================================================================================
+-- SP 11 · Inserta o actualiza lecturas que llegan del portal (alta, edición o archivo
+-- CSV/JSON) sin esperar al ETL. Recorre el mismo camino que un lote del ETL:
+-- staging -> validación -> condición -> upsert -> promedios diarios y por hora -> cierre,
+-- así las reglas son idénticas. p_lecturas = arreglo JSON con los registros tal como
+-- los devuelve DynamoDB (1 a 500). El ETL posterior los ve iguales y los omite.
+-- =====================================================================================
+CREATE OR REPLACE PROCEDURE climate_analytics.sp_upsert_lecturas(
+    p_lecturas jsonb, p_origen text, p_fuentes text[], p_condiciones text[],
+    INOUT p_batch_id uuid, INOUT p_insertados int, INOUT p_actualizados int,
+    INOUT p_omitidos int, INOUT p_rechazados int)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_total int;
+    v_validos int;
+    v_calculadas int;
+    v_dias_nuevos int;
+    v_dias_actualizados int;
+    v_evaluadas int;
+    v_desde timestamptz;
+    v_hasta timestamptz;
+    v_horas_nuevas int := 0;
+    v_horas_actualizadas int := 0;
+BEGIN
+    IF p_lecturas IS NULL OR jsonb_typeof(p_lecturas) <> 'array' THEN
+        RAISE EXCEPTION 'p_lecturas debe ser un arreglo JSON';
+    END IF;
+    v_total := jsonb_array_length(p_lecturas);
+    IF v_total = 0 OR v_total > 500 THEN
+        RAISE EXCEPTION 'Se aceptan de 1 a 500 lecturas por llamada (llegaron %)', v_total;
+    END IF;
+    IF p_origen IS NULL OR p_origen !~ '^[a-z0-9_-]{1,30}$' THEN
+        RAISE EXCEPTION 'Origen no válido: %', p_origen;
+    END IF;
+
+    p_batch_id := NULL;
+    CALL climate_analytics.sp_iniciar_lote('incremental', NULL, 'portal-' || p_origen, p_batch_id);
+
+    INSERT INTO climate_analytics.stg_observations
+        (batch_id, fila, location_id, station_id, timestamp_utc, source_record_id, source_version,
+         content_hash, last_event_id, source_id, condition_id, condition_origin,
+         temperature_c, feels_like_c, humidity_pct, pressure_hpa, wind_speed_kmh, precipitation_mm,
+         cloud_cover_pct, visibility_km, uv_index, dew_point_c, wind_direction,
+         precipitation_period_minutes, received_at_utc, updated_at_utc)
+    SELECT p_batch_id, r.fila::int, r.j->>'location_id', r.j->>'station_id', r.j->>'timestamp_utc',
+           r.j->>'record_id', (r.j->>'version')::int, r.j->>'content_hash', r.j->>'transaction_id',
+           r.j->>'source_id', r.j->>'condition_id', r.j->>'condition_origin',
+           (r.j->>'temperature_c')::numeric, (r.j->>'feels_like_c')::numeric,
+           (r.j->>'humidity_pct')::numeric, (r.j->>'pressure_hpa')::numeric,
+           (r.j->>'wind_speed_kmh')::numeric, (r.j->>'precipitation_mm')::numeric,
+           (r.j->>'cloud_cover_pct')::numeric, (r.j->>'visibility_km')::numeric,
+           (r.j->>'uv_index')::numeric, (r.j->>'dew_point_c')::numeric, r.j->>'wind_direction',
+           (r.j->>'precipitation_period_minutes')::int, r.j->>'created_at_utc', r.j->>'updated_at_utc'
+    FROM jsonb_array_elements(p_lecturas) WITH ORDINALITY AS r(j, fila);
+
+    CALL climate_analytics.sp_validar_staging(p_batch_id, p_fuentes, p_condiciones, v_validos, p_rechazados);
+    CALL climate_analytics.sp_clasificar_condiciones(p_batch_id, false, v_calculadas);
+    CALL climate_analytics.sp_cargar_observaciones(p_batch_id, p_insertados, p_actualizados, p_omitidos);
+    CALL climate_analytics.sp_calcular_agregados_diarios(v_dias_nuevos, v_dias_actualizados);
+    SELECT min(ts_utc), max(ts_utc) INTO v_desde, v_hasta
+    FROM climate_analytics.stg_observations WHERE batch_id = p_batch_id AND es_valido;
+    IF v_desde IS NOT NULL THEN
+        CALL climate_analytics.sp_calcular_agregados_horarios(v_desde, v_hasta, v_horas_nuevas, v_horas_actualizadas);
+    END IF;
+    CALL climate_analytics.sp_evaluar_predicciones(NULL::uuid, v_evaluadas);
+    CALL climate_analytics.sp_cerrar_lote(
+        p_batch_id, 'SUCCEEDED', v_total, p_insertados, p_actualizados, p_omitidos, p_rechazados,
+        jsonb_build_object('modo', 'portal', 'origen', p_origen, 'validos', v_validos,
+                           'condiciones_calculadas', v_calculadas, 'dias_nuevos', v_dias_nuevos,
+                           'dias_actualizados', v_dias_actualizados, 'horas_nuevas', v_horas_nuevas,
+                           'horas_actualizadas', v_horas_actualizadas, 'evaluadas', v_evaluadas),
+        NULL);
+END $$;
+
+-- =====================================================================================
+-- SP 14 · Agregados por HORA (granularity = 'HOUR') en climate_aggregates.
+-- Agrupa las observaciones por hora UTC; cada hora espera 1 muestra.
+-- p_desde / p_hasta limitan el rango (NULL = todo el historial). Igual que el SP 7,
+-- solo sube la versión de una hora si sus valores cambiaron.
+-- Con estas filas sp_evaluar_predicciones también puede evaluar las predicciones
+-- por hora (HOUR) contra lo que pasó en realidad.
+-- =====================================================================================
+CREATE OR REPLACE PROCEDURE climate_analytics.sp_calcular_agregados_horarios(
+    p_desde timestamptz, p_hasta timestamptz, INOUT p_nuevos int, INOUT p_actualizados int)
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF p_desde IS NOT NULL AND p_hasta IS NOT NULL AND p_hasta < p_desde THEN
+        RAISE EXCEPTION 'Rango no válido: p_hasta (%) es anterior a p_desde (%)', p_hasta, p_desde;
+    END IF;
+
+    WITH horas AS (
+        SELECT o.series_id,
+               (date_trunc('hour', o.timestamp_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS inicio,
+               min(o.temperature_c) AS tmin, max(o.temperature_c) AS tmax,
+               round(avg(o.temperature_c), 6) AS tmed, round(avg(o.humidity_pct), 6) AS hmed,
+               sum(o.precipitation_mm) AS lluvia, count(*) AS muestras
+        FROM climate_analytics.observations o
+        WHERE o.deleted_at_utc IS NULL
+          AND (p_desde IS NULL OR o.timestamp_utc >= (date_trunc('hour', p_desde AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))
+          AND (p_hasta IS NULL OR o.timestamp_utc < (date_trunc('hour', p_hasta AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') + interval '1 hour')
+        GROUP BY o.series_id, (date_trunc('hour', o.timestamp_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+    ), cambios AS (
+        INSERT INTO climate_analytics.climate_aggregates AS a
+            (series_id, granularity, starts_at_utc, ends_at_utc, version, temperature_min_c,
+             temperature_max_c, temperature_mean_c, humidity_mean_pct, precipitation_total_mm,
+             valid_samples, expected_samples, coverage_pct, computed_at_utc)
+        SELECT series_id, 'HOUR', inicio, inicio + interval '1 hour', 1, tmin, tmax, tmed, hmed,
+               lluvia, muestras, 1, least(100, 100.0 * muestras), clock_timestamp()
+        FROM horas
+        ON CONFLICT (series_id, granularity, starts_at_utc) DO UPDATE SET
+            ends_at_utc = EXCLUDED.ends_at_utc, temperature_min_c = EXCLUDED.temperature_min_c,
+            temperature_max_c = EXCLUDED.temperature_max_c, temperature_mean_c = EXCLUDED.temperature_mean_c,
+            humidity_mean_pct = EXCLUDED.humidity_mean_pct, precipitation_total_mm = EXCLUDED.precipitation_total_mm,
+            valid_samples = EXCLUDED.valid_samples, expected_samples = EXCLUDED.expected_samples,
+            coverage_pct = EXCLUDED.coverage_pct, computed_at_utc = EXCLUDED.computed_at_utc,
+            version = a.version + 1
+        WHERE (a.temperature_min_c, a.temperature_max_c, a.temperature_mean_c, a.humidity_mean_pct,
+               a.precipitation_total_mm, a.valid_samples)
+          IS DISTINCT FROM (EXCLUDED.temperature_min_c, EXCLUDED.temperature_max_c, EXCLUDED.temperature_mean_c,
+               EXCLUDED.humidity_mean_pct, EXCLUDED.precipitation_total_mm, EXCLUDED.valid_samples)
+        RETURNING (xmax = 0) AS insertado
+    )
+    SELECT count(*) FILTER (WHERE insertado), count(*) FILTER (WHERE NOT insertado)
+      INTO p_nuevos, p_actualizados
+    FROM cambios;
+END $$;
+
+-- =====================================================================================
+-- SP 15 · Promedio móvil de los p_dias días ANTERIORES a p_fecha (día local) para una
+-- ubicación, a partir de los agregados diarios completos (coverage_pct = 100).
+-- Es el método de referencia "promedio de 7 días" con el que se compara el modelo.
+-- No escribe nada: devuelve el resultado en sus parámetros INOUT.
+-- Ejemplo (DBeaver):
+--   CALL climate_analytics.sp_promedio_movil('LOC-CDMX', DATE '2026-11-18', 7,
+--        NULL, NULL, NULL, NULL, NULL, NULL);
+-- =====================================================================================
+CREATE OR REPLACE PROCEDURE climate_analytics.sp_promedio_movil(
+    p_location_id text, p_fecha date, p_dias int,
+    INOUT p_dias_usados int, INOUT p_temp_media_c numeric, INOUT p_temp_min_c numeric,
+    INOUT p_temp_max_c numeric, INOUT p_humedad_pct numeric, INOUT p_lluvia_mm numeric)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_series uuid;
+    v_zona text;
+BEGIN
+    IF p_dias IS NULL OR p_dias < 1 OR p_dias > 90 THEN
+        RAISE EXCEPTION 'p_dias debe estar entre 1 y 90 (llegó %)', p_dias;
+    END IF;
+    IF p_fecha IS NULL THEN
+        RAISE EXCEPTION 'Falta p_fecha (el día que se quiere estimar)';
+    END IF;
+
+    SELECT series_id, timezone_name INTO v_series, v_zona
+    FROM climate_analytics.series
+    WHERE location_id = coalesce(p_location_id, 'LOC-CDMX');
+    IF v_series IS NULL THEN
+        RAISE EXCEPTION 'La ubicación % no existe en series', coalesce(p_location_id, 'LOC-CDMX');
+    END IF;
+
+    SELECT count(*), round(avg(a.temperature_mean_c), 2), round(avg(a.temperature_min_c), 2),
+           round(avg(a.temperature_max_c), 2), round(avg(a.humidity_mean_pct), 2),
+           round(avg(a.precipitation_total_mm), 2)
+      INTO p_dias_usados, p_temp_media_c, p_temp_min_c, p_temp_max_c, p_humedad_pct, p_lluvia_mm
+    FROM climate_analytics.climate_aggregates a
+    WHERE a.series_id = v_series
+      AND a.granularity = 'DAY'
+      AND a.coverage_pct = 100
+      AND (a.starts_at_utc AT TIME ZONE v_zona)::date >= p_fecha - p_dias
+      AND (a.starts_at_utc AT TIME ZONE v_zona)::date <  p_fecha;
+
+    IF p_dias_usados = 0 THEN
+        RAISE NOTICE 'No hay días completos entre % y %', p_fecha - p_dias, p_fecha - 1;
+    END IF;
+END $$;
+
+-- Verificación: deben aparecer 13 procedimientos (PROCEDURE) y 2 funciones auxiliares.
 SELECT routine_type AS tipo, routine_name AS nombre
 FROM information_schema.routines
 WHERE routine_schema = 'climate_analytics'

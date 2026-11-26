@@ -3,7 +3,7 @@
 Qué hace:
   1. Convierte cada hora de Open-Meteo al formato del contrato V2.
   2. La valida con el MISMO contract.py que usan el portal y las Lambdas.
-  3. Toma las primeras 2,000 horas válidas de cada ubicación (10,000 en total).
+  3. Toma las 10,000 horas válidas más recientes de CDMX (la única ubicación).
   4. Guarda las filas rechazadas con su motivo.
   5. Genera el SQL de catálogos para MySQL (paso 3) y catalogo.json.
 
@@ -13,6 +13,7 @@ Ejecutar desde la carpeta climate_portal_v3:
     .\\.venv\\Scripts\\python.exe etl\\paso2_transformar.py
 """
 import json
+import os
 import sys
 from collections import Counter
 from decimal import Decimal
@@ -128,7 +129,7 @@ def sql_catalogos(cat, modelos):
         "",
         "COMMIT;",
         "",
-        "-- Verificación: debe mostrar 2 fuentes, 8 condiciones, 5 ubicaciones y 5 estaciones.",
+        "-- Verificación: debe mostrar 2 fuentes, 8 condiciones, 1 ubicación (CDMX) y 1 estación.",
         "SELECT 'data_sources' AS tabla, COUNT(*) AS filas FROM data_sources",
         "UNION ALL SELECT 'weather_conditions', COUNT(*) FROM weather_conditions",
         "UNION ALL SELECT 'locations', COUNT(*) FROM locations",
@@ -151,7 +152,7 @@ def main():
         meta = CRUDOS / f"{lid}.meta.json"
         modelos[lid] = json.loads(meta.read_text(encoding="utf-8"))["modelo"] if meta.exists() else "desconocido"
         elevaciones[lid] = elevacion
-        elegidas = validas[:config.HORAS_POR_UBICACION]
+        elegidas = validas[-config.HORAS_POR_UBICACION:]   # las horas más recientes
         todas.extend(elegidas)
         todas_rechazadas.extend(rechazadas)
         aviso = "" if len(elegidas) == config.HORAS_POR_UBICACION else "  <-- faltan horas válidas"
@@ -174,6 +175,8 @@ def main():
     if todas:
         print(f"Periodo: {min(r['timestamp_utc'] for r in todas)} a {max(r['timestamp_utc'] for r in todas)}")
     print(f"\nSQL de catálogos para DBeaver: {CATALOGO_SQL.relative_to(CATALOGO_SQL.parents[2])}")
+    if os.environ.get("CLIMA_DATOS_DIR"):
+        return   # ejecución semanal: semanal.py sigue con la carga
     if len(todas) < config.HORAS_POR_UBICACION * len(config.UBICACIONES):
         print("\nAviso: hay menos de 10,000 registros. Amplía FECHA_FIN en config.py y repite los pasos 1 y 2.")
     print("Siguiente: paso 3 en DBeaver (catálogos) y luego paso4_cargar_dynamodb.py")

@@ -1,3 +1,14 @@
-{% extends 'base.html' %}{% block content %}
-<div class="login-layout"><section class="login-story"><p class="eyebrow">CLIMATE OBSERVATORY</p><h1>Better data.<br>Clearer forecasts.</h1><p>Capture, review and prepare climate observations in one workspace.</p><div class="login-stat">01 / Collect<br>02 / Validate<br>03 / Explore</div><p>Authorized team members only.</p></section><section class="card login-card"><p class="eyebrow">YOUR WORKSPACE</p><h2>Welcome back</h2><p class="muted">Sign in to Climate Records.</p><form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Username<input name="username" autocomplete="username" maxlength="80" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label><button class="button primary" type="submit">Sign in</button></form><p class="muted">Need access? Contact your administrator.</p><p class="muted">Local development accounts · 30-minute idle timeout</p></section></div>
+{% extends 'base.html' %}{% from 'icons.html' import icon %}
+{% block titulo %}Sign in{% endblock %}
+{% block main_clase %}ad-main{% endblock %}
+{% block content %}
+<div class="ad-login">
+<section class="ad-login-azul">{{ icon('cloud') }}<h1>Manage Mexico City's weather data</h1><p>Correct readings, import data and see who made each change. Visitors only see the forecast.</p></section>
+<section class="ad-tarjeta ad-login-form"><h2>Sign in</h2><p class="ad-sub">Administrators only.</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label class="campo">{{ "Email" if users_store.startswith("mysql") else "Username" }}<input name="username" autocomplete="username" maxlength="254" required autofocus></label>
+<label class="campo">Password<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label>
+<button class="ad-btn primario" type="submit">Sign in</button></form>
+<p class="ad-nota">After 5 failed attempts the account is locked for 15 minutes. Your session closes by itself after 30 minutes without use. No account? Ask another administrator to create one for you.</p></section>
+</div>
 {% endblock %}

@@ -1,0 +1,3 @@
+{% from 'icons.html' import icon %}
+{% macro migas(items, volver=None) %}<div class="ad-migas">{% if volver %}<a class="ad-btn regresar" href="{{ volver[1] }}">{{ icon('back') }} {{ volver[0] }}</a>{% endif %}
+<nav class="ad-ruta" aria-label="Breadcrumb">{% for texto, enlace in items %}{% if not loop.first %}<span class="sep" aria-hidden="true">›</span>{% endif %}{% if enlace %}<a href="{{ enlace }}">{{ texto }}</a>{% else %}<span aria-current="page">{{ texto }}</span>{% endif %}{% endfor %}</nav></div>{% endmacro %}

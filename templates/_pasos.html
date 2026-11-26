@@ -1,0 +1,2 @@
+{% from 'icons.html' import icon %}
+{% macro pasos(actual) %}<ol class="ad-pasos" aria-label="Import steps">{% for n, t in [(1, 'Upload file'), (2, 'Review'), (3, 'Result')] %}<li class="{{ 'paso-hecho' if n < actual else ('paso-actual' if n == actual else '') }}" {% if n == actual %}aria-current="step"{% endif %}><span class="num">{% if n < actual %}{{ icon('check') }}{% else %}{{ n }}{% endif %}</span>{{ t }}</li>{% endfor %}</ol>{% endmacro %}

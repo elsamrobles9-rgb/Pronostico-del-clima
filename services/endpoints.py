@@ -10,7 +10,10 @@ FUNCTIONS = {op: f"Climate{name}ReadingV2" for op, name in
 METHODS = {"read": "GET", "create": "POST", "update": "PUT", "delete": "DELETE"}
 
 class ApiError(Exception):
-    pass
+    """Message safe to show to users; status is the backend HTTP status (502 if unknown)."""
+    def __init__(self, message, status=502):
+        super().__init__(message)
+        self.status = status
 
 def unpack(status, body):
     if not isinstance(body, dict):
@@ -18,9 +21,10 @@ def unpack(status, body):
     if status not in (200, 201):
         message = body.get("message")
         if status in (400, 404, 409, 413) and isinstance(message, str):
-            raise ApiError(message[:300])
+            raise ApiError(message[:300], status)
         raise ApiError({401: "Sign in again.", 403: "Access denied.",
-                        429: "Too many requests. Try again later."}.get(status, "The service could not complete the request."))
+                        429: "Too many requests. Try again later."}.get(status, "The service could not complete the request."),
+                       status if status in (401, 403, 429) else 502)
     return body
 
 class Client:
@@ -67,19 +71,29 @@ class MemoryTable:
         return self.page([r for r in self.rows.values() if r["location_id"] == loc], options)
 
 def sample():
-    return dict(location_id="LOC-001", timestamp_utc="2026-10-10T00:00:00Z",
-                station_id="ST-001", source_id="SRC-MANUAL", condition_id="COND-01",
+    return dict(location_id="LOC-CDMX", timestamp_utc="2026-10-10T00:00:00Z",
+                station_id="ST-CDMX-OM", source_id="SRC-MANUAL", condition_id="COND-PARTLY-CLOUDY",
                 temperature_c=25.4, feels_like_c=26.5, humidity_pct=62.1,
                 pressure_hpa=1015.2, wind_speed_kmh=12.5, wind_direction="NE",
                 precipitation_mm=0, precipitation_period_minutes=60,
                 cloud_cover_pct=15.5, visibility_km=10, uv_index=3.2, dew_point_c=17.6)
 
 class DemoClient(Client):
-    def __init__(self, seed=True):
+    def __init__(self, seed=True, records=None):
         self.table = MemoryTable()
         self.service = ReadingService(self.table)
         self.lock = threading.RLock()
-        if seed: self.create(sample())
+        self.loaded = self.rejected = 0
+        if records is not None: self.load(records)
+        elif seed: self.create(sample())
+    def load(self, records):
+        """Carga lecturas reales en memoria con las mismas reglas que las Lambdas (versión 1 y huella)."""
+        for record in records:
+            try:
+                self.create(record)
+                self.loaded += 1
+            except ApiError:
+                self.rejected += 1
     def call(self, operation, data):
         event = {"queryStringParameters": data} if operation == "read" else {"body": dumps(data)}
         # Serialize the full read/compare/write cycle in this single-process demo.

@@ -1,3 +1,23 @@
-{% extends 'base.html' %}{% block content %}
-<p class="eyebrow">DATA INGESTION</p><h1>Import records</h1><p class="muted">Upload climate observations, review validation results, then confirm the import.</p><div class="steps">01 Upload file → 02 Review records → 03 Confirm import</div><div class="form-grid"><form class="card" method="post" enctype="multipart/form-data"><h2>Choose your dataset</h2><input type="hidden" name="csrf" value="{{ csrf }}"><label>CSV or JSON file<input type="file" name="file" accept=".csv,.json" required></label><p class="muted">UTF-8 · Up to 256 KB · 1–50 records per batch</p><button class="button primary">Validate file</button></form><aside class="card"><h2>Before you upload</h2><p>All measurement fields are required, including UV index and dew point. Use timestamps with a time-zone offset; they will be normalized to UTC minutes.</p><p>This version adds new records. Existing keys are rejected; edit existing records in the Records screen.</p><p>No data is sent to AWS during file validation.</p><a class="button" href="{{ url_for('import_template',kind='csv') }}">CSV template</a> <a class="button" href="{{ url_for('import_template',kind='json') }}">JSON template</a></aside></div>
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% from '_pasos.html' import pasos %}{% set seccion = 'importar' %}
+{% block titulo %}Import readings{% endblock %}
+{% block migas %}{{ migas([('Home', url_for('inicio')), ('Readings', url_for('index')), ('Import', None)], ('Back to readings', url_for('index'))) }}{% endblock %}
+{% block content %}
+<h1>Import readings</h1>
+<p class="ad-sub">Upload a CSV or JSON file. We check it first and show you every row; nothing is saved until you confirm.</p>
+{{ pasos(1) }}
+<div class="ad-rejilla ancha">
+<form class="ad-tarjeta" method="post" enctype="multipart/form-data"><h2>Choose your file</h2><input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="ad-archivo">{{ icon('file') }}<label class="campo">CSV or JSON file<input type="file" name="file" accept=".csv,.json" required></label></div>
+<p class="ad-nota">UTF-8 · up to 256 KB · 1 to 50 readings per file.</p>
+<div class="ad-barra"><a class="ad-btn" href="{{ url_for('index') }}">Cancel</a><button class="ad-btn primario" type="submit">Check file {{ icon('next') }}</button></div></form>
+<aside class="ad-tarjeta"><h2>Before you upload</h2>
+<ul class="ad-lista">
+<li>{{ icon('check') }} Mexico City readings only (LOC-CDMX).</li>
+<li>{{ icon('check') }} Every measurement is required, including UV index and dew point.</li>
+<li>{{ icon('check') }} Write the time with its time zone (for example <code>2026-11-19T00:00:00Z</code>).</li>
+<li>{{ icon('alert') }} Hours that already exist are not overwritten: to change them use Readings → Edit.</li>
+<li>{{ icon('info') }} Nothing is sent to AWS while checking.</li>
+</ul>
+<div class="ad-acciones ad-mt"><a class="ad-btn" href="{{ url_for('import_template',kind='csv') }}">{{ icon('file') }} CSV template</a><a class="ad-btn" href="{{ url_for('import_template',kind='json') }}">{{ icon('file') }} JSON template</a></div></aside>
+</div>
 {% endblock %}

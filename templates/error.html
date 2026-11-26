@@ -1,0 +1,14 @@
+{% extends 'base.html' %}{% from 'icons.html' import icon %}
+{% block titulo %}{{ title }}{% endblock %}
+{% block content %}
+<section class="ad-tarjeta ad-error">
+<p class="codigo">{{ 'ERROR ' ~ codigo if codigo else 'NOTICE' }}</p>
+<h1>{{ title }}</h1>
+<p>{{ message }}</p>
+{% if que_hacer %}<div class="que"><strong>What you can do:</strong> {{ que_hacer }}</div>{% endif %}
+{% if detalle %}<p class="ad-nota">Technical detail: {{ detalle }}</p>{% endif %}
+<div class="ad-acciones ad-mt">{% if regresar %}<a class="ad-btn" href="{{ regresar }}">{{ icon('back') }} Go back</a>{% endif %}
+<a class="ad-btn primario" href="{{ url_for('inicio') if current_user else url_for('login') }}">{{ 'Go to home' if current_user else 'Go to sign-in' }}</a>
+<a class="ad-btn" href="{{ url_for('public_home') }}">{{ icon('cloud') }} See the weather</a></div>
+</section>
+{% endblock %}

@@ -12,11 +12,12 @@ limpieza las hacen los procedimientos almacenados de etl/sql/procedimientos_post
   7. CALL sp_clasificar_condiciones      -> condición calculada si la fuente no la trae
   8. CALL sp_cargar_observaciones        -> inserta o actualiza observations
   9. CALL sp_marcar_borrados             -> borrado lógico (solo con --completo)
- 10. CALL sp_calcular_agregados_diarios  -> climate_aggregates
- 11. CALL sp_evaluar_predicciones        -> evalúa predicciones que ya tienen dato real
- 12. CALL sp_cerrar_lote                 -> SUCCEEDED con conteos (o FAILED si algo falla)
+ 10. CALL sp_calcular_agregados_diarios  -> climate_aggregates (DAY)
+ 11. CALL sp_calcular_agregados_horarios -> climate_aggregates (HOUR)
+ 12. CALL sp_evaluar_predicciones        -> evalúa predicciones que ya tienen dato real
+ 13. CALL sp_cerrar_lote                 -> SUCCEEDED con conteos (o FAILED si algo falla)
 
-Los pasos 4 a 12 ocurren en UNA transacción. Las filas rechazadas se quedan en
+Los pasos 4 a 13 ocurren en UNA transacción. Las filas rechazadas se quedan en
 stg_observations como cola de registros anómalos.
 
 Requisito: haber instalado etl/sql/procedimientos_postgres.sql (una sola vez, en DBeaver).
@@ -95,14 +96,18 @@ def llamar(destino, procedimiento, *argumentos, devuelve=True):
 
 
 # --------------------------------------------------------------------------- catálogo
-def catalogo_mysql():
+def conectar_mysql():
     import pymysql
     host, puerto = endpoint(config.MYSQL_INSTANCE)
     usuario = pedir("CLIMA_MYSQL_USER", "Usuario de MySQL (el que usas en DBeaver): ")
     clave = getpass.getpass("Contraseña de MySQL (no se muestra): ")
-    conexion = pymysql.connect(host=host, port=puerto, user=usuario, password=clave, database=config.MYSQL_DB,
-                               ssl=contexto_ssl(), connect_timeout=15, charset="utf8mb4",
-                               cursorclass=pymysql.cursors.DictCursor)
+    return pymysql.connect(host=host, port=puerto, user=usuario, password=clave, database=config.MYSQL_DB,
+                           ssl=contexto_ssl(), connect_timeout=15, charset="utf8mb4", autocommit=False,
+                           cursorclass=pymysql.cursors.DictCursor)
+
+
+def catalogo_mysql():
+    conexion = conectar_mysql()
     try:
         with conexion.cursor() as cursor:
             cursor.execute(
@@ -199,12 +204,16 @@ def ultimo_punto(destino):
 
 def verificar_procedimientos(destino):
     filas = destino.ejecutar(
-        "SELECT count(*) FROM information_schema.routines"
-        f" WHERE routine_schema = '{S}' AND routine_type = 'PROCEDURE' AND routine_name LIKE 'sp\\_%'", filas=True)
+        "SELECT routine_name FROM information_schema.routines"
+        f" WHERE routine_schema = '{S}' AND routine_type = 'PROCEDURE'", filas=True)
     destino.commit()
-    if int(filas[0][0]) < 10:
-        print("Faltan los procedimientos almacenados. Ejecuta primero etl/sql/procedimientos_postgres.sql"
-              " en DBeaver (conexión PostgreSQL, Alt+X).")
+    instalados = {fila[0] for fila in filas}
+    faltan = [n for n in ("sp_iniciar_lote", "sp_validar_staging", "sp_cargar_observaciones",
+                          "sp_calcular_agregados_diarios", "sp_calcular_agregados_horarios", "sp_cerrar_lote")
+              if n not in instalados]
+    if faltan:
+        print("Faltan stored procedures en PostgreSQL: " + ", ".join(faltan) + ".")
+        print("Instálalos primero:  .\\.venv\\Scripts\\python.exe etl\\instalar_sp.py --solo-postgres")
         destino.cerrar()
         sys.exit(1)
 
@@ -232,6 +241,8 @@ def ejecutar_etl(destino, cat, items, modo, desde):
                                                              "NULL", "NULL", "NULL"))
         borrados = int(llamar(destino, "sp_marcar_borrados", t(lote), "NULL")[0]) if modo == "completo" else 0
         dias_nuevos, dias_actualizados = map(int, llamar(destino, "sp_calcular_agregados_diarios", "NULL", "NULL"))
+        horas_nuevas, horas_actualizadas = map(int, llamar(destino, "sp_calcular_agregados_horarios",
+                                                           "NULL", "NULL", "NULL", "NULL"))
         (evaluadas,) = map(int, llamar(destino, "sp_evaluar_predicciones", "NULL", "NULL"))
         rechazos = destino.ejecutar(
             f"SELECT location_id, timestamp_utc, motivo_rechazo FROM {S}.stg_observations"
@@ -240,7 +251,8 @@ def ejecutar_etl(destino, cat, items, modo, desde):
         resultados = dict(leidos=len(items), series=int(series), validos=validos, rechazados=rechazados,
                           calculadas=calculadas, insertados=insertados, actualizados=actualizados,
                           omitidos=omitidos, borrados=borrados, dias_nuevos=dias_nuevos,
-                          dias_actualizados=dias_actualizados, evaluadas=evaluadas)
+                          dias_actualizados=dias_actualizados, horas_nuevas=horas_nuevas,
+                          horas_actualizadas=horas_actualizadas, evaluadas=evaluadas)
         punto = {"modo": modo, "max_updated_at_utc": maximo, **resultados}
         llamar(destino, "sp_cerrar_lote", t(lote), "'SUCCEEDED'", str(len(items)), str(insertados),
                str(actualizados), str(omitidos), str(rechazados), t(json.dumps(punto)) + "::jsonb", "NULL",
@@ -300,6 +312,7 @@ def main():
                           ("borrados", "borrados lógicos"), ("evaluadas", "predicciones evaluadas")):
         print(f"  {nombre:<32} {r[clave]:>7,}")
     print(f"  {'promedios diarios':<32} {r['dias_nuevos']:,} nuevos · {r['dias_actualizados']:,} actualizados")
+    print(f"  {'promedios por hora':<32} {r['horas_nuevas']:,} nuevos · {r['horas_actualizadas']:,} actualizados")
     if rechazos:
         ruta = DATOS / f"etl_rechazados_{lote[:8]}.csv"
         with open(ruta, "w", newline="", encoding="utf-8") as archivo:

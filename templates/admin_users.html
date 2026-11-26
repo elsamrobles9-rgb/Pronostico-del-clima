@@ -1,0 +1,20 @@
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from '_migas.html' import migas %}{% set seccion = 'usuarios' %}
+{% block titulo %}Administrators{% endblock %}
+{% block migas %}{{ migas([('Home', url_for('inicio')), ('Administrators', None)], ('Back to home', url_for('inicio'))) }}{% endblock %}
+{% block content %}
+<h1>Administrators</h1>
+<p class="ad-sub">Only administrators have accounts; visitors see the weather without signing in. Passwords are stored hashed by the sp_guardar_admin procedure{% if users_store.startswith('mysql') %} in MySQL{% endif %}.</p>
+<div class="ad-tabla-caja"><table class="ad-tabla"><thead><tr><th scope="col">{{ 'Email' if users_store.startswith('mysql') else 'Username' }}</th><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col"><span class="ad-sr">Actions</span></th></tr></thead><tbody>
+{% for u in users %}<tr><td class="fuerte">{{ u.username }}</td><td>{{ u.display_name or '—' }}</td>
+<td>{% if u.active %}<span class="ad-etiqueta ok">Active</span>{% else %}<span class="ad-etiqueta mal">Disabled</span>{% endif %}</td>
+<td class="gris">{{ u.created_at_utc|hora_local }}</td>
+<td><div class="derecha">{% if u.username != current_user.username %}<form method="post" action="{{ url_for('admin_user_status') }}" data-confirmar="{{ 'Disable ' ~ u.username ~ '? All of their sessions will be closed right now.' if u.active else 'Enable ' ~ u.username ~ ' again?' }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="username" value="{{ u.username }}"><input type="hidden" name="action" value="{{ 'disable' if u.active else 'enable' }}"><button class="ad-btn chico {{ 'suave-peligro' if u.active else '' }}" type="submit">{{ 'Disable' if u.active else 'Enable' }}</button></form>
+{% else %}<span class="ad-etiqueta">This is you</span><a class="ad-btn chico" href="{{ url_for('account_password') }}">{{ icon('key') }} My password</a>{% endif %}</div></td></tr>
+{% else %}<tr><td colspan="5"><div class="ad-vacio">The list of administrators could not be read.</div></td></tr>{% endfor %}</tbody></table></div>
+<form method="post" class="ad-tarjeta ad-mt" autocomplete="off"><h2>Add an administrator or change a password</h2>
+<p class="ad-sub">If the {{ 'email' if users_store.startswith('mysql') else 'username' }} already exists, its password is replaced and its sessions are closed. Share the password through a private channel.</p>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="ad-campos"><label class="campo">{{ 'Email' if users_store.startswith('mysql') else 'Username' }}<input name="username" maxlength="254" required></label><label class="campo">Display name<input name="display_name" maxlength="120"><span class="ayuda">Optional.</span></label>
+<label class="campo">Password<input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><span class="ayuda">12 to 128 characters.</span></label><label class="campo">Repeat the password<input name="confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></label></div>
+<div class="ad-barra ad-mt"><span></span><button class="ad-btn primario" type="submit">{{ icon('check') }} Save administrator</button></div></form>
+{% endblock %}

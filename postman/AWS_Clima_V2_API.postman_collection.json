@@ -1,0 +1,652 @@
+{
+  "info": {
+    "name": "AWS Clima V2 - API REST",
+    "description": "Portal Flask en http://127.0.0.1:5000. Solo la CDMX. Públicas: health, pronóstico y login. El resto exige el JWT de un administrador (Bearer). Idempotency-Key en POST/PUT, If-Match para concurrencia optimista. Ejecuta las peticiones en orden.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:5000"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "location",
+      "value": "LOC-CDMX"
+    },
+    {
+      "key": "ts",
+      "value": ""
+    },
+    {
+      "key": "idemKey",
+      "value": ""
+    },
+    {
+      "key": "version",
+      "value": ""
+    },
+    {
+      "key": "oldVersion",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Health (público)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "health"
+          ]
+        },
+        "description": "Única ruta pública junto con el login.",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "00b Pronóstico público de la CDMX (sin token)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "noauth"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/pronostico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pronostico"
+          ]
+        },
+        "description": "Los mismos datos que ve el visitante: lectura actual, 7 días y horas del día elegido (?dia=AAAA-MM-DD)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y 7 días', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().dias.length).to.eql(7); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Login (obtiene el JWT)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "description": "Escribe tu correo y contraseña en las variables de la colección (pestaña Variables). El token se guarda solo en {{token}}.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y token', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.collectionVariables.set('token', r.access_token);",
+              "console.log('Rol:', r.role, 'expira en', r.expires_in, 's; inactividad', r.idle_timeout_seconds, 's');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Sin token = 401",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings"
+          ]
+        },
+        "description": "Demuestra que sin Authorization: Bearer la API rechaza la petición.",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Mi usuario",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/me",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "me"
+          ]
+        },
+        "description": "Datos del usuario dueño del token."
+      }
+    },
+    {
+      "name": "04 Catálogo (MySQL)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/catalog",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "catalog"
+          ]
+        },
+        "description": "Ubicaciones, estaciones, fuentes y condiciones activas en MySQL."
+      }
+    },
+    {
+      "name": "05 Listar lecturas de una ubicación",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings?location_id={{location}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings"
+          ],
+          "query": [
+            {
+              "key": "location_id",
+              "value": "{{location}}"
+            }
+          ]
+        },
+        "description": "25 por página; usa next_cursor para la siguiente."
+      }
+    },
+    {
+      "name": "06 Crear lectura (Idempotency-Key nueva)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idemKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings"
+          ]
+        },
+        "description": "Genera una Idempotency-Key nueva y la hora actual en UTC. condition_id AUTO = la condición se calcula; location_id y station_id vacíos = CDMX. La respuesta trae 'postgres' con el resultado de sp_upsert_lecturas.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"location_id\": \"\",\n  \"timestamp_utc\": \"{{ts}}\",\n  \"station_id\": \"\",\n  \"source_id\": \"SRC-MANUAL\",\n  \"condition_id\": \"AUTO\",\n  \"temperature_c\": 21.5,\n  \"feels_like_c\": 21.0,\n  \"humidity_pct\": 55,\n  \"pressure_hpa\": 1012.4,\n  \"wind_speed_kmh\": 9.5,\n  \"wind_direction\": \"NE\",\n  \"precipitation_mm\": 0,\n  \"precipitation_period_minutes\": 60,\n  \"cloud_cover_pct\": 40,\n  \"visibility_km\": 10,\n  \"uv_index\": 4.2,\n  \"dew_point_c\": 12.1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('idemKey', 'postman-' + Date.now());",
+              "pm.collectionVariables.set('ts', new Date().toISOString().slice(0,16) + ':00Z');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 creada', () => pm.response.to.have.status(201));",
+              "pm.test('No es repetición', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false'));",
+              "pm.collectionVariables.set('version', pm.response.json().record.version);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Repetir la MISMA petición (misma clave)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idemKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings"
+          ]
+        },
+        "description": "Simula un reintento por timeout: misma clave y mismo cuerpo. No se escribe dos veces; devuelve la respuesta guardada.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"location_id\": \"\",\n  \"timestamp_utc\": \"{{ts}}\",\n  \"station_id\": \"\",\n  \"source_id\": \"SRC-MANUAL\",\n  \"condition_id\": \"AUTO\",\n  \"temperature_c\": 21.5,\n  \"feels_like_c\": 21.0,\n  \"humidity_pct\": 55,\n  \"pressure_hpa\": 1012.4,\n  \"wind_speed_kmh\": 9.5,\n  \"wind_direction\": \"NE\",\n  \"precipitation_mm\": 0,\n  \"precipitation_period_minutes\": 60,\n  \"cloud_cover_pct\": 40,\n  \"visibility_km\": 10,\n  \"uv_index\": 4.2,\n  \"dew_point_c\": 12.1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Misma respuesta 201', () => pm.response.to.have.status(201));",
+              "pm.test('Es repetición', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Misma clave con otro cuerpo = 422",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idemKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings"
+          ]
+        },
+        "description": "Reusar una clave con datos distintos se rechaza.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"location_id\": \"\",\n  \"timestamp_utc\": \"{{ts}}\",\n  \"station_id\": \"\",\n  \"source_id\": \"SRC-MANUAL\",\n  \"condition_id\": \"AUTO\",\n  \"temperature_c\": 21.5,\n  \"feels_like_c\": 21.0,\n  \"humidity_pct\": 55,\n  \"pressure_hpa\": 1012.4,\n  \"wind_speed_kmh\": 9.5,\n  \"wind_direction\": \"NE\",\n  \"precipitation_mm\": 0,\n  \"precipitation_period_minutes\": 60,\n  \"cloud_cover_pct\": 40,\n  \"visibility_km\": 10,\n  \"uv_index\": 9.9,\n  \"dew_point_c\": 12.1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('422', () => pm.response.to.have.status(422));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 Consultar la lectura (ETag = versión)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings/{{location}}/{{ts}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings",
+            "{{location}}",
+            "{{ts}}"
+          ]
+        },
+        "description": "El encabezado ETag trae la versión para el If-Match."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('version', pm.response.json().version);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 Actualizar con If-Match (concurrencia optimista)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "If-Match",
+            "value": "\"{{version}}\""
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idemKey}}-put"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings/{{location}}/{{ts}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings",
+            "{{location}}",
+            "{{ts}}"
+          ]
+        },
+        "description": "Solo se envían los campos que cambian. If-Match debe ser la versión actual.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"temperature_c\": 23.0,\n  \"uv_index\": 5.0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('oldVersion', pm.collectionVariables.get('version'));",
+              "pm.collectionVariables.set('version', pm.response.json().record.version);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 Actualizar con versión vieja = 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "If-Match",
+            "value": "\"{{oldVersion}}\""
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idemKey}}-stale"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings/{{location}}/{{ts}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings",
+            "{{location}}",
+            "{{ts}}"
+          ]
+        },
+        "description": "Otra persona ya cambió el registro: la API rechaza la escritura en lugar de pisarla.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"uv_index\": 6.0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 Borrar (solo ADMIN)",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "If-Match",
+            "value": "\"{{version}}\""
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/readings/{{location}}/{{ts}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "readings",
+            "{{location}}",
+            "{{ts}}"
+          ]
+        },
+        "description": "Requiere If-Match. La lectura queda marcada como borrada en PostgreSQL en la siguiente corrida completa del ETL."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 Cerrar sesión (revoca el token)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/logout",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "logout"
+          ]
+        },
+        "description": "Después de esto el mismo token devuelve 401."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 Token revocado = 401",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/me",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "me"
+          ]
+        },
+        "description": "Revocación inmediata."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
